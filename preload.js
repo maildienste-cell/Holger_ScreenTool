@@ -11,5 +11,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onAgentLog: (callback) => ipcRenderer.on('agent-log', (_event, msg) => callback(msg)),
   onShowApproval: (callback) => ipcRenderer.on('show-approval-popup', (_event, data) => callback(data)),
   sendApprovalResult: (approved) => ipcRenderer.invoke('approve-command', { approved }),
-  takeInteractiveScreenshot: () => ipcRenderer.invoke('take-interactive-screenshot')
+  takeInteractiveScreenshot: () => ipcRenderer.invoke('take-interactive-screenshot'),
+  onModelDownloadRequired: (callback) => ipcRenderer.on('model-download-required', callback),
+  onModelDownloadProgress: (callback) => ipcRenderer.on('model-download-progress', (_event, data) => callback(data)),
+  startModelDownload: () => ipcRenderer.send('start-model-download')
 });

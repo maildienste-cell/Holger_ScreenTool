@@ -2,6 +2,7 @@ const { app, BrowserWindow, Tray, ipcMain, screen, shell, safeStorage } = requir
 const path = require('path');
 const fs = require('fs');
 const https = require('https');
+const http = require('http');
 const { execSync, exec } = require('child_process');
 const util = require('util');
 const execAsync = util.promisify(exec);
@@ -83,6 +84,32 @@ app.dock.hide();
 app.whenReady().then(() => {
   createTray();
   createWindow();
+
+  // Start local server for global context menus
+  http.createServer(async (req, res) => {
+    if (req.url === '/crop') {
+      res.writeHead(200);
+      res.end('OK');
+      if (window) window.hide();
+      await new Promise(r => setTimeout(r, 300));
+      
+      const screenshotPath = path.join(app.getPath('temp'), 'agent_screenshot.jpg');
+      try {
+        await execAsync(`screencapture -i -x "${screenshotPath}"`);
+        const config = await getConfig();
+        let size = 1600; let jpegQual = 80;
+        if (config.imageQuality === 'low') { size = 800; jpegQual = 60; }
+        if (config.imageQuality === 'high') { size = 2400; jpegQual = 90; }
+        await execAsync(`sips -s format jpeg -s formatOptions ${jpegQual} -Z ${size} "${screenshotPath}" --out "${screenshotPath}"`);
+      } catch (e) {
+        console.error("Interactive screenshot failed", e);
+      }
+      showWindow();
+    } else {
+      res.writeHead(404);
+      res.end();
+    }
+  }).listen(14111, '127.0.0.1');
 });
 
 app.on('window-all-closed', e => e.preventDefault());
@@ -97,6 +124,29 @@ function createTray() {
   tray = new Tray(trayIcon);
   tray.setToolTip('Desktop Mini Agent');
   tray.on('click', () => toggleWindow());
+
+  const contextMenu = require('electron').Menu.buildFromTemplate([
+    { label: '🎯 Bereich auswählen (Fadenkreuz)', click: async () => {
+        if (window) window.hide();
+        await new Promise(r => setTimeout(r, 300));
+        const screenshotPath = path.join(app.getPath('temp'), 'agent_screenshot.jpg');
+        try {
+          await execAsync(`screencapture -i -x "${screenshotPath}"`);
+          const config = await getConfig();
+          let size = 1600; let jpegQual = 80;
+          if (config.imageQuality === 'low') { size = 800; jpegQual = 60; }
+          if (config.imageQuality === 'high') { size = 2400; jpegQual = 90; }
+          await execAsync(`sips -s format jpeg -s formatOptions ${jpegQual} -Z ${size} "${screenshotPath}" --out "${screenshotPath}"`);
+        } catch (e) {}
+        showWindow();
+    }},
+    { type: 'separator' },
+    { label: 'Beenden', click: () => { app.quit(); } }
+  ]);
+  
+  tray.on('right-click', () => {
+    tray.popUpContextMenu(contextMenu);
+  });
 }
 
 function createWindow() {
@@ -247,6 +297,7 @@ function downloadModelFile(url, dest, event) {
         if (len) {
           const progress = Math.round((downloaded / len) * 100);
           if (progress > lastReport && progress % 5 === 0) {
+            event.sender.send('model-download-progress', { progress, mb: (downloaded/1024/1024).toFixed(1) });
             event.sender.send('agent-log', `[LOKAL] Download: ${progress}% (${(downloaded/1024/1024).toFixed(1)} MB)`);
             lastReport = progress;
           }
@@ -282,9 +333,9 @@ async function initLocalModel(event) {
     const modelPath = path.join(modelDir, modelName);
 
     if (!fs.existsSync(modelPath)) {
-      event.sender.send('agent-log', `[LOKAL] Modell '${modelName}' wird heruntergeladen (ca. 1.6 GB). Bitte warten...`);
-      await downloadModelFile(`https://huggingface.co/bartowski/gemma-2-2b-it-GGUF/resolve/main/${modelName}`, modelPath, event);
-      event.sender.send('agent-log', '[LOKAL] Download abgeschlossen!');
+      event.sender.send('model-download-required');
+      isLocalModelLoading = false;
+      return false;
     }
 
     event.sender.send('agent-log', '[LOKAL] Lade Modell in den Arbeitsspeicher (Metal/GPU)...');
@@ -371,7 +422,8 @@ ipcMain.handle('process-query', async (event, { query, screenshotPath, history =
         event.sender.send('agent-log', `[INFO] Lokales Modell unterstützt aktuell keine Bildanalyse oder Dateianhänge. Diese werden ignoriert.`);
       }
 
-      await initLocalModel(event);
+      const loaded = await initLocalModel(event);
+      if (!loaded) return { text: '' };
 
       const sequence = localLlamaContext.getSequence();
       try {
@@ -796,4 +848,19 @@ ipcMain.handle('take-interactive-screenshot', async (event) => {
   
   showWindow();
   return true;
+});
+
+ipcMain.on('start-model-download', async (event) => {
+  const modelDir = path.join(app.getPath('userData'), 'models');
+  const modelName = 'gemma-2-2b-it-Q4_K_M.gguf';
+  const modelPath = path.join(modelDir, modelName);
+  try {
+    event.sender.send('model-download-progress', { progress: 0, mb: '0.0' });
+    event.sender.send('agent-log', `[LOKAL] Modell wird manuell heruntergeladen...`);
+    await downloadModelFile(`https://huggingface.co/bartowski/gemma-2-2b-it-GGUF/resolve/main/${modelName}`, modelPath, event);
+    event.sender.send('agent-log', '[LOKAL] Download abgeschlossen!');
+    event.sender.send('model-download-progress', { progress: 100, mb: '1600' });
+  } catch (e) {
+    event.sender.send('agent-log', '[FEHLER] Download fehlgeschlagen: ' + e.message);
+  }
 });

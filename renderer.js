@@ -389,4 +389,40 @@ document.addEventListener('drop', (e) => {
   }
 });
 
+// Setup Overlay Logic
+const setupOverlay = document.getElementById('setup-overlay');
+const btnDownloadModel = document.getElementById('btn-download-model');
+const progressContainer = document.getElementById('download-progress-container');
+const progressBar = document.getElementById('download-progress-bar');
+const progressText = document.getElementById('download-status-text');
+
+if (window.electronAPI && window.electronAPI.onModelDownloadRequired) {
+  window.electronAPI.onModelDownloadRequired(() => {
+    setupOverlay.style.display = 'flex';
+    btnDownloadModel.style.display = 'block';
+    progressContainer.style.display = 'none';
+  });
+
+  window.electronAPI.onModelDownloadProgress((data) => {
+    setupOverlay.style.display = 'flex';
+    btnDownloadModel.style.display = 'none';
+    progressContainer.style.display = 'block';
+    progressBar.style.width = data.progress + '%';
+    progressText.innerText = data.progress + '% (' + data.mb + ' MB)';
+    
+    if (data.progress === 100) {
+      setTimeout(() => {
+         setupOverlay.style.display = 'none';
+         addMessage('Modell erfolgreich installiert! Du kannst nun offline chatten.', 'agent');
+      }, 1500);
+    }
+  });
+
+  btnDownloadModel.addEventListener('click', () => {
+    btnDownloadModel.style.display = 'none';
+    progressContainer.style.display = 'block';
+    window.electronAPI.startModelDownload();
+  });
+}
+
 init();
