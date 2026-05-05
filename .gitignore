@@ -1,0 +1,8 @@
+node_modules/
+release-builds/
+dist/
+build/
+*.gguf
+*.bin
+.DS_Store
+models/

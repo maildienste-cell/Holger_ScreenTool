@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    body {
+      margin: 0; padding: 10px;
+      background: transparent;
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+      overflow: hidden;
+      height: 100vh; box-sizing: border-box;
+    }
+    .agent-container {
+      width: 100%; height: 100%;
+      background: rgba(30, 30, 30, 0.75);
+      backdrop-filter: blur(24px) saturate(180%);
+      -webkit-backdrop-filter: blur(24px) saturate(180%);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 24px;
+      box-shadow: 0 20px 40px rgba(0,0,0,0.4);
+      display: flex; flex-direction: column;
+      color: #fff;
+      position: relative;
+    }
+    .header {
+      padding: 16px 20px; border-bottom: 1px solid rgba(255,255,255,0.05);
+      display: flex; justify-content: space-between; align-items: center;
+      font-weight: 600; font-size: 15px;
+      -webkit-app-region: drag;
+    }
+    .header-left {
+      display: flex; align-items: center; gap: 8px;
+    }
+    .cost-badge {
+      font-size: 11px; padding: 3px 8px; background: rgba(0,0,0,0.3);
+      border-radius: 12px; opacity: 0.8; font-weight: normal; font-variant-numeric: tabular-nums;
+    }
+    .header-actions {
+      display: flex; gap: 12px; align-items: center;
+      -webkit-app-region: no-drag;
+    }
+    .icon-btn {
+      cursor: pointer; opacity: 0.5; font-size: 16px; line-height: 1; transition: opacity 0.2s;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .icon-btn:hover { opacity: 1; }
+    
+    #bubble-click:hover { transform: scale(1.1); background: rgba(255,255,255,0.1); }
+    
+    .chat-area {
+      padding: 16px 20px; flex-grow: 1; overflow-y: auto;
+      display: flex; flex-direction: column; gap: 12px;
+      -webkit-app-region: no-drag;
+    }
+    .chat-area::-webkit-scrollbar { width: 6px; }
+    .chat-area::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 3px; }
+    
+    .message {
+      padding: 12px 16px; border-radius: 18px; font-size: 14px; line-height: 1.5; max-width: 85%;
+    }
+    .message.user { background: #007AFF; align-self: flex-end; border-bottom-right-radius: 4px; }
+    .message.agent { background: rgba(255,255,255,0.1); align-self: flex-start; border-bottom-left-radius: 4px; word-wrap: break-word; }
+    
+    #drop-overlay {
+      display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+      background: rgba(0, 122, 255, 0.2); border: 2px dashed #007AFF; border-radius: 24px;
+      z-index: 50; justify-content: center; align-items: center; box-sizing: border-box; pointer-events: none;
+    }
+    #drop-overlay span { background: #007AFF; padding: 10px 20px; border-radius: 12px; font-weight: bold; }
+    
+    .file-badge {
+      font-size: 11px; background: rgba(255,255,255,0.1); padding: 4px 8px; border-radius: 6px;
+      display: flex; align-items: center; gap: 6px; border: 1px solid rgba(255,255,255,0.2);
+    }
+    
+    .input-area {
+      padding: 16px 20px; border-top: 1px solid rgba(255,255,255,0.05);
+      -webkit-app-region: no-drag;
+    }
+    .input-box {
+      display: flex; gap: 8px; background: rgba(255,255,255,0.1);
+      border-radius: 20px; padding: 6px 6px 6px 16px; align-items: center;
+    }
+    .input-box input {
+      flex-grow: 1; background: transparent; border: none; outline: none;
+      font-size: 14px; color: white;
+    }
+    .input-box button {
+      background: #007AFF; color: white; border: none; width: 32px; height: 32px;
+      border-radius: 50%; cursor: pointer; display: flex; justify-content: center; align-items: center;
+    }
+    
+    .skill-badge {
+      font-size: 10px; background: rgba(0,122,255,0.2); color: #60a5fa; 
+      padding: 3px 8px; border-radius: 12px; white-space: nowrap; 
+      font-weight: 500; border: 1px solid rgba(0,122,255,0.3);
+      display: flex; align-items: center; transition: background 0.2s;
+    }
+    .skill-badge:hover .remove-skill { opacity: 1 !important; color: white; }
+    
+    /* Settings View */
+    #settings-view {
+      display: none; flex-direction: column; padding: 20px; gap: 15px;
+      height: 100%; box-sizing: border-box; overflow-y: auto;
+      -webkit-app-region: no-drag;
+    }
+    #settings-view::-webkit-scrollbar { width: 6px; }
+    #settings-view::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 3px; }
+    
+    .setting-group { display: flex; flex-direction: column; gap: 6px; }
+    .setting-group label { font-size: 13px; color: rgba(255,255,255,0.7); font-weight: 500; }
+    .setting-group input[type="password"], .setting-group textarea, .setting-group select {
+      padding: 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.2);
+      background: rgba(0,0,0,0.2); color: white; outline: none; font-family: inherit;
+    }
+    .setting-group select option, .setting-group select optgroup { background: #333; color: white; }
+    .setting-group textarea { resize: vertical; min-height: 120px; font-size: 12px; }
+    
+    .toggle-group {
+      display: flex; align-items: center; justify-content: space-between;
+      background: rgba(0,0,0,0.2); padding: 12px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1);
+    }
+    .toggle-group label { font-size: 14px; cursor: pointer; flex-grow: 1;}
+    
+    #save-settings-btn {
+      padding: 12px; border-radius: 8px; border: none; background: #007AFF;
+      color: white; font-weight: bold; cursor: pointer; margin-top: 10px;
+    }
+    #cancel-settings-btn {
+      padding: 12px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.2); background: transparent;
+      color: white; cursor: pointer;
+    }
+
+    /* Logs View */
+    #logs-view {
+      display: none; flex-direction: column; padding: 20px; gap: 10px; height: 100%; box-sizing: border-box; -webkit-app-region: no-drag;
+    }
+    #log-content::-webkit-scrollbar { width: 6px; }
+    #log-content::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 3px; }
+    
+    /* Modal */
+    #approval-modal {
+      display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
+      background: rgba(0,0,0,0.85); z-index: 100; flex-direction: column; justify-content: center; 
+      align-items: center; padding: 20px; box-sizing: border-box; -webkit-app-region: no-drag;
+      border-radius: 24px;
+    }
+    .message.agent pre { background: rgba(0,0,0,0.3); padding: 10px; border-radius: 8px; overflow-x: auto; font-family: monospace; font-size: 12px; }
+    .message.agent code { font-family: monospace; background: rgba(0,0,0,0.2); padding: 2px 4px; border-radius: 4px; font-size: 12px; }
+    .message.agent p { margin-top: 0; margin-bottom: 10px; }
+    .message.agent p:last-child { margin-bottom: 0; }
+  </style>
+</head>
+<body>
+  <div class="agent-container" id="main-view">
+    <div class="header">
+      <div class="header-left">
+        <span>Desktop Agent</span>
+        <span class="cost-badge" id="cost-badge" title="API Kosten in USD">$0.000</span>
+      </div>
+      <div class="header-actions">
+        <span class="icon-btn" id="clear-chat-btn" title="Chatverlauf leeren">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+        </span>
+        <span class="icon-btn" id="open-logs-btn" title="Logs & Scripts anzeigen">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>
+        </span>
+        <span class="icon-btn" id="open-settings-btn" title="Einstellungen">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+        </span>
+        <span class="icon-btn" id="hide-btn" title="Minimieren">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+        </span>
+        <span class="icon-btn" id="close-btn" title="Schließen">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </span>
+      </div>
+    </div>
+    
+    <div id="drop-overlay"><span>📄 Datei hier ablegen</span></div>
+    
+    <div class="chat-area" id="chat-area">
+      <div class="message agent">Ich sehe deinen Bildschirm. Was möchtest du wissen?</div>
+    </div>
+    <div class="input-area" style="padding-top: 8px;">
+      <div id="attached-files-container" style="display: flex; gap: 6px; padding: 0 4px 8px 4px; flex-wrap: wrap;"></div>
+      <div id="active-skills-container" style="display: flex; gap: 6px; padding: 0 4px 8px 4px; flex-wrap: wrap;"></div>
+      <div class="input-box">
+        <div style="position: relative; display: flex; align-items: center;">
+          <button id="skill-btn" title="Skill hinzufügen" style="background: rgba(255,255,255,0.1); color: white; border: none; width: 26px; height: 26px; border-radius: 50%; cursor: pointer; display: flex; justify-content: center; align-items: center; font-size: 16px; padding: 0; transition: background 0.2s;">+</button>
+          <select id="skill-selector" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer;">
+            <option value="" disabled selected>Skill hinzufügen...</option>
+          </select>
+        </div>
+        <input type="text" id="query-input" placeholder="Frag mich was..." autocomplete="off">
+        <button id="crop-btn" title="Bildschirmausschnitt wählen" style="background: transparent; color: #aaa; border: none; width: 32px; height: 32px; cursor: pointer; display: flex; justify-content: center; align-items: center;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2v14a2 2 0 0 0 2 2h14"></path><path d="M18 22V8a2 2 0 0 0-2-2H2"></path></svg>
+        </button>
+        <button id="mic-btn" title="Spracheingabe" style="background: transparent; color: #aaa; border: none; width: 32px; height: 32px; cursor: pointer; display: flex; justify-content: center; align-items: center;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>
+        </button>
+        <button id="submit-btn">→</button>
+      </div>
+    </div>
+    
+    <!-- Approval Modal -->
+    <div id="approval-modal">
+      <div style="background: #1e1e1e; border: 1px solid rgba(255,255,255,0.2); border-radius: 12px; padding: 20px; width: 100%; box-shadow: 0 10px 40px rgba(0,0,0,0.8);">
+        <h3 style="margin-top: 0; color: #ff9f0a; font-size: 15px;">⚠️ Terminal-Befehl Freigabe</h3>
+        <p style="font-size: 12px; opacity: 0.8; margin-top: -5px; margin-bottom: 10px;">Der Agent möchte folgenden Code auf deinem System ausführen:</p>
+        <div style="background: #000; color: #34c759; padding: 10px; border-radius: 6px; font-family: monospace; font-size: 11px; margin-bottom: 15px; word-wrap: break-word; max-height: 80px; overflow-y: auto;">
+          <code id="approval-command"></code>
+        </div>
+        <div style="font-size: 12px; margin-bottom: 20px; background: rgba(255,159,10,0.1); padding: 10px; border-radius: 6px; border: 1px solid rgba(255,159,10,0.3);">
+          <strong style="color: #ff9f0a;">🤖 Firewall Risiko-Bewertung:</strong><br>
+          <span id="approval-assessment" style="opacity: 0.9; line-height: 1.4; display: block; margin-top: 5px; font-size: 11px;">Lädt Firewall Analyse...</span>
+        </div>
+        <div style="display: flex; gap: 10px;">
+          <button id="btn-approve" style="flex: 1; background: #34c759; color: white; border: none; padding: 10px; border-radius: 6px; cursor: pointer; font-weight: bold;">Erlauben</button>
+          <button id="btn-decline" style="flex: 1; background: #ff3b30; color: white; border: none; padding: 10px; border-radius: 6px; cursor: pointer; font-weight: bold;">Ablehnen</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Settings View -->
+  <div class="agent-container" id="settings-view">
+    <h3 style="margin-top: 0; margin-bottom: 5px;">Konfiguration</h3>
+    
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1);">
+      <span style="font-size: 13px; color: rgba(255,255,255,0.8);">Gesamtkosten: <b id="settings-total-cost">$0.000</b></span>
+      <button id="reset-cost-btn" style="padding: 6px 10px; font-size: 11px; background: rgba(255,59,48,0.5); border: none; border-radius: 6px; color: white; cursor: pointer; font-weight: bold;">Reset</button>
+    </div>
+
+    <div class="setting-group">
+      <label>KI Modell</label>
+      <select id="cfg-model">
+        <optgroup label="OpenAI">
+          <option value="gpt-5.4">GPT-5.4 (Neuestes Modell)</option>
+          <option value="gpt-4o">GPT-4o (Standard)</option>
+          <option value="gpt-4o-mini">GPT-4o-mini (Günstig)</option>
+        </optgroup>
+        <optgroup label="Google">
+          <option value="gemini-1.5-pro-latest">Gemini 1.5 Pro</option>
+          <option value="gemini-1.5-flash-latest">Gemini 1.5 Flash</option>
+        </optgroup>
+        <optgroup label="Lokal (Offline)">
+          <option value="local-gemma-2b">Gemma 2 (2B) - Lokal (ohne API Key)</option>
+        </optgroup>
+      </select>
+    </div>
+
+    <div class="setting-group">
+      <label>Bild-Qualität (Kosten-Optimierung)</label>
+      <select id="cfg-quality">
+        <option value="none">Kein Bild (Nur Chat/Text - 0 Kosten)</option>
+        <option value="low">Niedrig (800px - Gut für Layouts, sehr günstig)</option>
+        <option value="standard">Standard (1600px - Guter Kompromiss)</option>
+        <option value="high">Hoch (2400px - Für Code/kleine Schrift)</option>
+      </select>
+    </div>
+
+    <div class="setting-group">
+      <label>OpenAI API Key (für GPT)</label>
+      <input type="password" id="cfg-apikey" placeholder="sk-proj-...">
+    </div>
+    
+    <div class="setting-group">
+      <label>Gemini API Key (für Google)</label>
+      <input type="password" id="cfg-geminikey" placeholder="AIzaSy...">
+    </div>
+    
+    <div class="setting-group">
+      <label>Kreativität (Temperature: <span id="temp-val">0.5</span>)</label>
+      <input type="range" id="cfg-temperature" min="0" max="2" step="0.1" value="0.5">
+    </div>
+
+    <div class="toggle-group">
+      <label for="cfg-actions">Aktionen erlauben (Computer Use)</label>
+      <input type="checkbox" id="cfg-actions">
+    </div>
+    
+    <div class="setting-group">
+      <label>System Prompt (Verhalten)</label>
+      <textarea id="cfg-prompt" placeholder="Du bist Antigravity..."></textarea>
+    </div>
+    
+    <div class="setting-group" style="margin-top: 10px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 10px;">
+      <label style="display: flex; justify-content: space-between;">Eigene Skills (Prompt Manager) <button id="add-custom-skill-btn" style="background: rgba(255,255,255,0.1); color: white; border: none; border-radius: 4px; padding: 2px 6px; cursor: pointer; font-size: 11px;">+ Neu</button></label>
+      <div id="custom-skills-list" style="display: flex; flex-direction: column; gap: 8px; max-height: 150px; overflow-y: auto;"></div>
+    </div>
+    
+    <button id="save-settings-btn" style="margin-top: 15px;">Speichern</button>
+    <button id="cancel-settings-btn">Abbrechen</button>
+  </div>
+
+  <!-- Logs View -->
+  <div class="agent-container" id="logs-view">
+    <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 10px;">
+      <h3 style="margin: 0; font-size: 14px;">Aktions-Protokoll</h3>
+      <button id="close-logs-btn" style="background: transparent; color: white; border: none; font-size: 20px; cursor: pointer;">&times;</button>
+    </div>
+    <div id="log-content" style="flex-grow: 1; overflow-y: auto; background: rgba(0,0,0,0.3); border-radius: 8px; padding: 10px; font-family: monospace; font-size: 11px; white-space: pre-wrap; color: #4af626; margin-top: 5px;">> System bereit...</div>
+  </div>
+
+  <!-- Bubble View (Floating Chat Icon) -->
+  <div class="agent-container" id="bubble-view" style="display: none; border-radius: 50%; width: 100%; height: 100%; box-sizing: border-box; -webkit-app-region: drag; flex-direction: row; justify-content: center; align-items: center; padding: 0;">
+    <div id="bubble-click" style="-webkit-app-region: no-drag; cursor: pointer; width: 44px; height: 44px; border-radius: 50%; display: flex; justify-content: center; align-items: center; transition: all 0.2s;">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path>
+      </svg>
+    </div>
+  </div>
+
+  <script src="node_modules/marked/lib/marked.umd.js"></script>
+  <script src="node_modules/dompurify/dist/purify.min.js"></script>
+  <script src="renderer.js"></script>
+</body>
+</html>
