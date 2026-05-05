@@ -105,6 +105,7 @@ app.whenReady().then(() => {
         console.error("Interactive screenshot failed", e);
       }
       showWindow();
+      if (window) window.webContents.send('screenshot-taken', screenshotPath);
     } else {
       res.writeHead(404);
       res.end();
@@ -139,6 +140,7 @@ function createTray() {
           await execAsync(`sips -s format jpeg -s formatOptions ${jpegQual} -Z ${size} "${screenshotPath}" --out "${screenshotPath}"`);
         } catch (e) {}
         showWindow();
+        if (window) window.webContents.send('screenshot-taken', screenshotPath);
     }},
     { type: 'separator' },
     { label: 'Beenden', click: () => { app.quit(); } }
@@ -175,38 +177,7 @@ function toggleWindow() {
 
 async function showWindow() {
   const config = await getConfig();
-  const screenshotPath = path.join(app.getPath('temp'), 'agent_screenshot.jpg');
   
-  if (config.imageQuality !== 'none') {
-    try {
-      const { systemPreferences } = require('electron');
-      if (systemPreferences.getMediaAccessStatus) {
-        const access = systemPreferences.getMediaAccessStatus('screen');
-        if (access !== 'granted') {
-          setTimeout(() => {
-            if (window) window.webContents.send('agent-log', `[WARNUNG] macOS Bildschirmaufnahme-Berechtigung fehlt! macOS zeigt als Schutz nur das Hintergrundbild (Desktop). Bitte in den Systemeinstellungen erlauben.`);
-          }, 1000);
-        }
-      }
-
-      let size = 1600;
-      let jpegQual = 80;
-      if (config.imageQuality === 'low') { size = 800; jpegQual = 60; }
-      if (config.imageQuality === 'high') { size = 2400; jpegQual = 90; }
-
-      // Kurze Verzögerung, damit macOS Fenster-Animationen (Space-Wechsel) abschließen können
-      await new Promise(r => setTimeout(r, 400));
-
-      await execAsync(`screencapture -x -C -m "${screenshotPath}"`);
-      await execAsync(`sips -s format jpeg -s formatOptions ${jpegQual} -Z ${size} "${screenshotPath}" --out "${screenshotPath}"`);
-    } catch (e) {
-      console.error("Screenshot failed", e);
-    }
-  } else {
-    // If quality is none, ensure no old screenshot is left behind
-    if (fs.existsSync(screenshotPath)) fs.unlinkSync(screenshotPath);
-  }
-
   const { width, height, x, y } = screen.getPrimaryDisplay().workArea;
   const winWidth = 380;
   const winHeight = 650;
@@ -220,7 +191,6 @@ async function showWindow() {
   window.show();
   window.focus();
   window.webContents.send('force-expanded-mode');
-  window.webContents.send('screenshot-taken', screenshotPath);
 }
 
 // Websuche via DuckDuckGo HTML
@@ -373,8 +343,27 @@ ipcMain.handle('process-query', async (event, { query, screenshotPath, history =
     const useScreenshot = skills.includes('screenchat') && config.imageQuality !== 'none';
     let base64Image = '';
     
-    if (useScreenshot && fs.existsSync(screenshotPath)) {
+    if (screenshotPath && fs.existsSync(screenshotPath)) {
       base64Image = fs.readFileSync(screenshotPath).toString('base64');
+      fs.unlinkSync(screenshotPath);
+    } else if (useScreenshot) {
+      const currentScreenshotPath = path.join(app.getPath('temp'), 'agent_current_screenshot.jpg');
+      try {
+        if (window) window.hide();
+        await new Promise(r => setTimeout(r, 150));
+        let size = 1600; let jpegQual = 80;
+        if (config.imageQuality === 'low') { size = 800; jpegQual = 60; }
+        if (config.imageQuality === 'high') { size = 2400; jpegQual = 90; }
+        await execAsync(`screencapture -x -C -m "${currentScreenshotPath}"`);
+        await execAsync(`sips -s format jpeg -s formatOptions ${jpegQual} -Z ${size} "${currentScreenshotPath}" --out "${currentScreenshotPath}"`);
+        if (window) window.show();
+        
+        if (fs.existsSync(currentScreenshotPath)) {
+          base64Image = fs.readFileSync(currentScreenshotPath).toString('base64');
+        }
+      } catch(e) {
+        if (window) window.show();
+      }
     }
 
     let basePrompt = config.systemPrompt || DEFAULT_PROMPT;
@@ -847,6 +836,7 @@ ipcMain.handle('take-interactive-screenshot', async (event) => {
   }
   
   showWindow();
+  if (window) window.webContents.send('screenshot-taken', screenshotPath);
   return true;
 });
 

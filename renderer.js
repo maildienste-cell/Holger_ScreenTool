@@ -286,6 +286,9 @@ async function sendQuery() {
   attachedFiles = [];
   renderAttachedFiles();
   
+  const sentScreenshot = currentScreenshot;
+  currentScreenshot = ''; // clear it for next prompt!
+  
   const typingMsg = document.createElement('div');
   typingMsg.className = 'message agent';
   typingMsg.textContent = 'Agent denkt nach...';
@@ -295,7 +298,7 @@ async function sendQuery() {
   try {
     response = await window.electronAPI.processQuery({ 
       query, 
-      screenshotPath: currentScreenshot, 
+      screenshotPath: sentScreenshot, 
       history: chatHistory,
       skills: Array.from(activeSkills),
       files: filesToSend
