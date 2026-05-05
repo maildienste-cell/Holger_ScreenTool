@@ -202,11 +202,11 @@ async function performWebSearch(query) {
       }
     });
     const html = await res.text();
-    const regex = /<a class="result__snippet[^>]*>(.*?)<\/a>/g;
+    const regex = /<a class="result__snippet[^>]*>([\s\S]*?)<\/a>/g;
     let match;
     let results = [];
     while ((match = regex.exec(html)) !== null && results.length < 5) {
-      results.push(match[1].replace(/<[^>]*>?/gm, ''));
+      results.push(match[1].replace(/<[^>]*>?/gm, '').trim());
     }
     if (results.length === 0) return "Keine Suchergebnisse gefunden.";
     return results.join('\n\n');
@@ -347,6 +347,14 @@ ipcMain.handle('process-query', async (event, { query, screenshotPath, history =
       base64Image = fs.readFileSync(screenshotPath).toString('base64');
       fs.unlinkSync(screenshotPath);
     } else if (useScreenshot) {
+      const { systemPreferences } = require('electron');
+      if (systemPreferences.getMediaAccessStatus) {
+        const access = systemPreferences.getMediaAccessStatus('screen');
+        if (access !== 'granted') {
+          event.sender.send('agent-log', `[FEHLER] macOS blockiert den Screenshot! (Datenschutz). Erlaube die Bildschirmaufnahme in den macOS Systemeinstellungen.`);
+        }
+      }
+
       const currentScreenshotPath = path.join(app.getPath('temp'), 'agent_current_screenshot.jpg');
       try {
         if (window) window.hide();
@@ -616,10 +624,9 @@ ipcMain.handle('process-query', async (event, { query, screenshotPath, history =
       let message = data.choices[0].message;
 
       // MULTI-TURN SCHLEIFE
-      if (message.tool_calls && message.tool_calls.length > 0) {
+      let toolResultsHtml = "";
+      while (message.tool_calls && message.tool_calls.length > 0) {
         messages.push(message); 
-        
-        let toolResultsHtml = "";
 
         for (const toolCall of message.tool_calls) {
           event.sender.send('agent-log', `Nutze Tool: ${toolCall.function.name}`);
@@ -773,18 +780,12 @@ ipcMain.handle('process-query', async (event, { query, screenshotPath, history =
         
         addCost(data.usage);
         message = data.choices[0].message;
-        
-        config.totalCost = (config.totalCost || 0) + totalQueryCost;
-        await saveConfig({ totalCost: config.totalCost });
-
-        return { text: toolResultsHtml + "\n\n" + message.content, totalCost: config.totalCost };
       }
-
-      // Falls kein Tool genutzt wurde
-      event.sender.send('agent-log', `Keine Tools genutzt. Antwort empfangen.`);
+      
       config.totalCost = (config.totalCost || 0) + totalQueryCost;
       await saveConfig({ totalCost: config.totalCost });
-      return { text: message.content, totalCost: config.totalCost };
+
+      return { text: toolResultsHtml + "\n\n" + (message.content || ""), totalCost: config.totalCost };
     }
   } catch (err) {
     event.sender.send('agent-log', `[FEHLER] ${err.message}`);
