@@ -760,9 +760,10 @@ ipcMain.handle('process-query', async (event, { query, screenshotPath, history =
             fs.writeFileSync(tempPath, args.content);
             event.sender.send('agent-log', `Dokument erstellt: ${args.filename}`);
             
-            toolResultsHtml += `<br><div style="margin-top: 8px; padding: 10px; background: rgba(52, 199, 89, 0.2); border: 1px solid #34c759; border-radius: 8px; display: flex; align-items: center; justify-content: space-between;">
-              <div>📄 <b>${args.filename}</b></div>
-              <button class="download-btn" data-path="${tempPath}" data-filename="${args.filename}" style="background: #34c759; color: white; border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-weight: bold;">Speichern</button>
+            toolResultsHtml += `<br><div class="download-btn" data-path="${tempPath}" data-filename="${args.filename}" style="margin-top: 8px; display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; background: rgba(255, 255, 255, 0.1); border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 6px; cursor: pointer; transition: background 0.2s;" onmouseover="this.style.background='rgba(255, 255, 255, 0.2)'" onmouseout="this.style.background='rgba(255, 255, 255, 0.1)'">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>
+              <span style="font-size: 12px; font-family: monospace; color: #ddd; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${args.filename}</span>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#34c759" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-left: 4px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
             </div>`;
             
             messages.push({

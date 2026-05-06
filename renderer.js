@@ -260,9 +260,10 @@ function addMessage(text, sender) {
 }
 
 document.getElementById('chat-area').addEventListener('click', (e) => {
-  if (e.target.classList.contains('download-btn')) {
-    const path = e.target.getAttribute('data-path');
-    const filename = e.target.getAttribute('data-filename');
+  const btn = e.target.closest('.download-btn');
+  if (btn) {
+    const path = btn.getAttribute('data-path');
+    const filename = btn.getAttribute('data-filename');
     window.electronAPI.saveDocument(path, filename);
   }
 });
