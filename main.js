@@ -70,7 +70,7 @@ async function getConfig() {
       { id: 'compact', name: 'Kompakt (Kurz & Knapp)', prompt: 'KOMPAKT: Liefere Antworten maximal komprimiert. Keine Begrüßungen, keine Höflichkeitsfloskeln, kein unnötiger Text. Nur die absolute, direkte Antwort oder Lösung in wenigen Worten.' },
       { id: 'tradingexpert', name: 'Trading Experte (Hebel/2%)', prompt: 'TRADING EXPERTE: Du bist ein professioneller Daytrader. Dein Ziel ist es, mir exakt zu sagen, WANN und WIE ich einsteigen soll. Das Ziel ist mindestens ein 2% Anstieg, damit ich hebeln kann. Du berechnest die Wahrscheinlichkeit für das Setup und das Chance-Risiko-Verhältnis (CRV). Bei deiner Analyse beachtest du zwingend: Stochastik, Price-Action, Momentum, Trendfolgen, Volumen und Liquidität.' },
       { id: 'stockcheck', name: 'StockCheck (Chartanalyse)', prompt: 'STOCKCHECK: Du bist ein professioneller Daytrader und Chartanalyst. Analysiere die sichtbaren Chartinformationen im Screenshot. Antworte, was wahrscheinlicher ist: Long oder Short, und worauf zu achten ist. Ziel ist ein 2% Trade Minimum, der mit einem 10er Hebel umsetzbar ist. Gib das Chance-Risiko-Verhältnis (RCV/CRV) an. Betrachte immer die Price Action und die wahrscheinlichste Richtung für den Tag. Recherchiere zwingend aktuelle News zur Aktie und gib eine fundamentale Zusammenfassung (Fundamental Summary).' },
-      { id: 'mrbillig', name: 'Mr. Billig (Preisvergleich)', prompt: 'MR BILLIG: Du bist "Mr. Billig", der ultimative Einkaufsassistent! Deine Aufgabe ist es, für Produkte die günstigsten Preise im Internet zu finden. Du unterscheidest streng zwischen "Neu", "Gebraucht" und "Refurbished". Nutze zwingend das Tool "search_product_prices". Gib die Ergebnisse als ansprechende HTML-Kacheln (Tiles) aus. Jede Kachel MUSS das bereitgestellte Thumbnail-Bild, den Preis, den Zustand (Neu/Gebraucht/Refurbished), den Shop-Namen und einen Link (HTML <a> Tag) zur Quelle enthalten. Nutze CSS Flexbox für die Kacheln (z.B. <div style="display:flex; gap:10px; background:rgba(0,0,0,0.3); padding:10px; border-radius:8px; margin-bottom:10px;"><img src="URL" style="width:60px; height:60px; object-fit:cover; border-radius:6px;"><div>...</div></div>). Sei freundlich und extrem fokussiert auf Schnäppchen!' },
+      { id: 'mrbillig', name: 'Mr. Billig (Preisvergleich)', prompt: 'MR BILLIG: Du bist "Mr. Billig", der ultimative Einkaufsassistent! Deine Aufgabe ist es, für Produkte die günstigsten Preise im Internet zu finden. Du unterscheidest streng zwischen "Neu", "Gebraucht" und "Refurbished". Nutze zwingend das Tool "search_product_prices". Gib die Ergebnisse als ansprechende HTML-Kacheln (Tiles) aus. Jede Kachel MUSS das bereitgestellte Thumbnail-Bild, den Preis, den Zustand, den Shop-Namen und einen funktionierenden Link (HTML <a> Tag) zum exakten Produkt enthalten. WICHTIG: Nutze als Link-Ziel (href) ZWINGEND die exakte URL (beginnt oft mit "https://..."), die im Text-Snippet als "[URL: ...]" angegeben ist! Verlinke niemals nur auf die Startseite des Shops. Nutze CSS Flexbox für die Kacheln (z.B. <div style="display:flex; gap:10px; background:rgba(0,0,0,0.3); padding:10px; border-radius:8px; margin-bottom:10px;"><img src="URL" style="width:60px; height:60px; object-fit:cover; border-radius:6px;"><div>...</div></div>).' },
       { id: 'deepresearch', name: 'Deep Research (Tiefenrecherche)', prompt: 'DEEP RESEARCH: Deine Aufgabe ist die tiefgehende, autonome Recherche. Wenn der Nutzer eine Frage stellt, begnüge dich NICHT mit einer einzigen Websuche. Nutze das Websuche-Tool so oft wie nötig (3-5 Mal für verschiedene Aspekte des Themas). Führe einen iterativen Recherche-Loop durch: Suchen -> Lesen -> Neue Unterfragen suchen -> Lesen. Wenn du genügend Informationen gesammelt hast, erstellst du ein umfassendes, detailliertes Dossier. Nutze das "create_document" Tool, um das finale Dossier als Markdown-Datei (.md) zum Download bereitzustellen.' }
   ];
 
@@ -247,11 +247,19 @@ async function performWebSearch(query) {
       }
     });
     const html = await res.text();
-    const regex = /<a class="result__snippet[^>]*>([\s\S]*?)<\/a>/g;
+    const regex = /<a class="result__snippet[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
     let match;
     let results = [];
     while ((match = regex.exec(html)) !== null && results.length < 5) {
-      results.push(match[1].replace(/<[^>]*>?/gm, '').trim());
+      let url = match[1];
+      if (url.startsWith('//')) url = 'https:' + url;
+      else if (url.startsWith('/')) url = 'https://duckduckgo.com' + url;
+      // duckduckgo URLs are often redirects (e.g. /l/?uddg=encoded_url)
+      if (url.includes('uddg=')) {
+        try { url = decodeURIComponent(url.split('uddg=')[1].split('&')[0]); } catch(e){}
+      }
+      const text = match[2].replace(/<[^>]*>?/gm, '').trim();
+      results.push(`[URL: ${url}]\n${text}`);
     }
     if (results.length === 0) return "Keine Suchergebnisse gefunden.";
     return results.join('\n\n');
@@ -417,6 +425,42 @@ ipcMain.handle('process-query', async (event, { query, screenshotPath, history =
 
     if (!isGemini && !isLocal && !config.apiKey) return { error: 'Kein OpenAI API Key gefunden. Bitte in den Einstellungen eintragen.' };
     if (isGemini && !config.geminiApiKey) return { error: 'Kein Gemini API Key gefunden. Bitte in den Einstellungen eintragen.' };
+
+    let finalSkills = [...skills];
+    if (finalSkills.includes('auto')) {
+      finalSkills = finalSkills.filter(s => s !== 'auto');
+      const skillOptions = config.customSkills.map(s => `- ${s.id}: ${s.name}`).join("\n");
+      const routerPrompt = `Du bist ein Router. Wähle die nötigen Skills für diese Nutzerfrage: "${query}"\nVerfügbare Skills:\n${skillOptions}\nAntworte NUR mit einer kommagetrennten Liste der IDs (z.B. "web,programmer"). Wenn nichts passt, antworte "none".`;
+      
+      event.sender.send('agent-log', '[AUTO-PILOT] Analysiere nötige Skills...');
+      try {
+        let routerResponse = "";
+        if (isGemini) {
+          const req = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${config.geminiApiKey}`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: routerPrompt }] }] })
+          });
+          const d = await req.json();
+          routerResponse = d.candidates[0].content.parts[0].text;
+        } else if (!isLocal) {
+          const req = await fetch('https://api.openai.com/v1/chat/completions', {
+            method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${config.apiKey}` },
+            body: JSON.stringify({ model: 'gpt-4o-mini', messages: [{ role: 'user', content: routerPrompt }] })
+          });
+          const d = await req.json();
+          routerResponse = d.choices[0].message.content;
+        }
+        
+        const chosen = routerResponse.split(',').map(s => s.trim().replace(/[^a-z0-9-]/gi, '').toLowerCase()).filter(s => s && s !== 'none');
+        event.sender.send('agent-log', `[AUTO-PILOT] Aktivierte Skills: ${chosen.join(', ') || 'Keine (Standard-Chat)'}`);
+        for (const c of chosen) {
+           if (!finalSkills.includes(c)) finalSkills.push(c);
+        }
+      } catch (e) {
+        event.sender.send('agent-log', '[AUTO-PILOT FEHLER] ' + e.message);
+      }
+    }
+    skills = finalSkills;
 
     const useScreenshot = skills.includes('screenchat') && config.imageQuality !== 'none';
     let base64Image = '';

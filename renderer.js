@@ -290,6 +290,12 @@ function renderSkills() {
   // Keep only the first disabled option 'Skill hinzufügen...'
   while(selector.options.length > 1) { selector.remove(1); }
   
+  skillNames['auto'] = '🤖 Auto-Pilot';
+  const autoOpt = document.createElement('option');
+  autoOpt.value = 'auto';
+  autoOpt.textContent = '🤖 Auto-Pilot (KI wählt Skills)';
+  selector.appendChild(autoOpt);
+
   customSkillsList.forEach(s => {
     skillNames[s.id] = s.name;
     const opt = document.createElement('option');
