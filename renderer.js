@@ -1,6 +1,6 @@
 let currentScreenshot = '';
 let chatHistory = [];
-let activeSkills = new Set(['screenchat']);
+let activeSkills = new Set(['screenchat', 'influencer', 'auto']);
 let attachedFiles = [];
 let customSkillsList = [];
 
