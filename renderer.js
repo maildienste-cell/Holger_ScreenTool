@@ -100,11 +100,13 @@ document.getElementById('hide-btn').addEventListener('click', () => {
   document.getElementById('settings-view').style.display = 'none';
   document.getElementById('logs-view').style.display = 'none';
   document.getElementById('bubble-view').style.display = 'flex';
+  document.body.style.padding = '0'; // Remove padding for bubble mode
   window.electronAPI.setWindowMode('bubble');
 });
 
 if (window.electronAPI.onForceExpandedMode) {
   window.electronAPI.onForceExpandedMode(() => {
+    document.body.style.padding = '20px 20px 50px 20px'; // Restore padding
     document.getElementById('bubble-view').style.display = 'none';
     document.getElementById('settings-view').style.display = 'none';
     document.getElementById('logs-view').style.display = 'none';

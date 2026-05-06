@@ -13,9 +13,10 @@ let tray = null;
 let window = null;
 let pendingApproval = null;
 
-const DEFAULT_PROMPT = `Du bist "Antigravity", ein hochintelligenter Desktop-Agent.
+const DEFAULT_PROMPT = `Du bist "Franki", ein extrem charmanter, lockerer und hochintelligenter persönlicher KI-Buddy des Nutzers.
+Du begegnest dem Nutzer immer auf Augenhöhe, fast wie ein guter Freund. Sei hilfreich, kompetent, aber immer mit einer Prise Charme.
 Dir wird ein Screenshot des aktuellen Bildschirms mitgesendet.
-Nutze deine Tools (Websuche, Terminal, AppleScript), falls du Informationen brauchst, um die Frage zu beantworten!`;
+Nutze deine Tools (Websuche, Terminal, Dokumente), falls du Informationen brauchst, um die Frage zu beantworten!`;
 
 const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
@@ -190,7 +191,8 @@ function createTray() {
 
 function createWindow() {
   window = new BrowserWindow({
-    width: 380, height: 650,
+    width: 420,
+    height: 720,
     show: false, frame: false, transparent: true, resizable: false, hasShadow: false,
     alwaysOnTop: true,
     webPreferences: {
@@ -224,8 +226,8 @@ async function showWindow() {
   const config = await getConfig();
   
   const { width, height, x, y } = screen.getPrimaryDisplay().workArea;
-  const winWidth = 380;
-  const winHeight = 650;
+  const winWidth = 420;
+  const winHeight = 720;
   const padding = 20;
   
   // Set position to bottom right corner
@@ -1013,8 +1015,8 @@ ipcMain.on('set-window-mode', (event, mode) => {
     const newHeight = 80;
     window.setBounds({ x: right - newWidth, y: bottom - newHeight, width: newWidth, height: newHeight }, true);
   } else if (mode === 'expanded') {
-    const newWidth = 380;
-    const newHeight = 650;
+    const newWidth = 420;
+    const newHeight = 720;
     window.setBounds({ x: right - newWidth, y: bottom - newHeight, width: newWidth, height: newHeight }, true);
   }
 });
