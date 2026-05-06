@@ -21,13 +21,17 @@ async function getConfig() {
   const configPath = path.join(app.getPath('userData'), 'config.json');
   let config = { apiKey: '', geminiApiKey: '', model: 'gpt-4o', allowActions: false, systemPrompt: DEFAULT_PROMPT, totalCost: 0 };
   if (fs.existsSync(configPath)) {
-    const raw = JSON.parse(await fsPromises.readFile(configPath));
-    config = { ...config, ...raw };
-    if (config.apiKey && safeStorage.isEncryptionAvailable()) {
-      try { config.apiKey = safeStorage.decryptString(Buffer.from(config.apiKey, 'base64')); } catch (e) { config.apiKey = ''; }
-    }
-    if (config.geminiApiKey && safeStorage.isEncryptionAvailable()) {
-      try { config.geminiApiKey = safeStorage.decryptString(Buffer.from(config.geminiApiKey, 'base64')); } catch (e) { config.geminiApiKey = ''; }
+    try {
+      const raw = JSON.parse(await fsPromises.readFile(configPath, 'utf-8'));
+      config = { ...config, ...raw };
+      if (config.apiKey && safeStorage.isEncryptionAvailable()) {
+        try { config.apiKey = safeStorage.decryptString(Buffer.from(config.apiKey, 'base64')); } catch (e) { config.apiKey = ''; }
+      }
+      if (config.geminiApiKey && safeStorage.isEncryptionAvailable()) {
+        try { config.geminiApiKey = safeStorage.decryptString(Buffer.from(config.geminiApiKey, 'base64')); } catch (e) { config.geminiApiKey = ''; }
+      }
+    } catch (err) {
+      console.error("Error reading config.json:", err);
     }
   }
   if (!config.systemPrompt) config.systemPrompt = DEFAULT_PROMPT;

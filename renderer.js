@@ -225,12 +225,18 @@ document.getElementById('close-logs-btn').addEventListener('click', () => {
 
 function init() {
   window.electronAPI.getConfig().then(config => {
-    customSkillsList = config.customSkills || [];
-    renderSkills();
-    updateCostUI(config.totalCost);
-    if (!config.apiKey && !config.geminiApiKey) {
-      openSettings();
+    try {
+      customSkillsList = config.customSkills || [];
+      renderSkills();
+      updateCostUI(config.totalCost);
+      if (!config.apiKey && !config.geminiApiKey) {
+        openSettings();
+      }
+    } catch (err) {
+      console.error("Error in init then:", err);
     }
+  }).catch(err => {
+    console.error("Error getting config:", err);
   });
 }
 
