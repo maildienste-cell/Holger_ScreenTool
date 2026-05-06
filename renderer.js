@@ -44,8 +44,7 @@ function renderScreenshotBadge() {
   container.innerHTML = `
     <div class="file-badge" style="padding: 2px 8px 2px 2px;">
       <img src="file://${currentScreenshot}?t=${timestamp}" style="width: 24px; height: 24px; object-fit: cover; border-radius: 4px; margin-right: 4px;">
-      📸 Ausschnitt
-      <span id="remove-screenshot-btn" style="cursor: pointer; opacity: 0.6; font-size: 14px; font-weight: bold; margin-left: 6px;">&times;</span>
+      <span id="remove-screenshot-btn" style="cursor: pointer; opacity: 0.6; font-size: 14px; font-weight: bold; margin-left: 2px;">&times;</span>
     </div>
   `;
   document.getElementById('remove-screenshot-btn').addEventListener('click', () => {
