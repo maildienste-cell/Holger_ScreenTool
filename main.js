@@ -17,8 +17,26 @@ const DEFAULT_PROMPT = `Du bist "Antigravity", ein hochintelligenter Desktop-Age
 Dir wird ein Screenshot des aktuellen Bildschirms mitgesendet.
 Nutze deine Tools (Websuche, Terminal, AppleScript), falls du Informationen brauchst, um die Frage zu beantworten!`;
 
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  app.quit();
+} else {
+  app.on('second-instance', (event, commandLine, workingDirectory) => {
+    if (window) {
+      if (!window.isVisible()) {
+        showWindow();
+      } else {
+        window.focus();
+      }
+    }
+  });
+}
+
 async function getConfig() {
   const configPath = path.join(app.getPath('userData'), 'config.json');
+  const debugLog = path.join(app.getPath('userData'), 'debug_app.txt');
+  fs.appendFileSync(debugLog, `\n[${new Date().toISOString()}] getConfig called\n`);
+  
   let config = { apiKey: '', geminiApiKey: '', model: 'gpt-4o', allowActions: false, systemPrompt: DEFAULT_PROMPT, totalCost: 0 };
   if (fs.existsSync(configPath)) {
     try {
@@ -31,9 +49,13 @@ async function getConfig() {
         try { config.geminiApiKey = safeStorage.decryptString(Buffer.from(config.geminiApiKey, 'base64')); } catch (e) { config.geminiApiKey = ''; }
       }
     } catch (err) {
+      fs.appendFileSync(debugLog, `[ERROR] config.json read: ${err.message}\n`);
       console.error("Error reading config.json:", err);
     }
+  } else {
+    fs.appendFileSync(debugLog, `[WARN] config.json does not exist\n`);
   }
+  
   if (!config.systemPrompt) config.systemPrompt = DEFAULT_PROMPT;
   if (!config.imageQuality) config.imageQuality = 'standard';
   if (typeof config.totalCost !== 'number') config.totalCost = 0;
@@ -60,7 +82,7 @@ async function getConfig() {
   }
 
   config.version = app.getVersion();
-
+  fs.appendFileSync(debugLog, `[SUCCESS] getConfig returning\n`);
   return config;
 }
 
@@ -190,6 +212,8 @@ function createWindow() {
     shell.openExternal(url);
     return { action: 'deny' };
   });
+
+  window.webContents.openDevTools({ mode: 'detach' });
 }
 
 function toggleWindow() {

@@ -118,10 +118,12 @@ window.electronAPI.onForceExpandedMode(() => {
   document.getElementById('query-input').focus();
 });
 
-function updateCostUI(totalCost) {
-  const costStr = `$${(totalCost || 0).toFixed(4)}`;
-  document.getElementById('cost-badge').textContent = costStr;
-  document.getElementById('settings-total-cost').textContent = costStr;
+function updateCostUI(cost) {
+  const badge = document.getElementById('cost-badge');
+  if (badge) badge.textContent = '$' + parseFloat(cost).toFixed(3);
+  
+  const settingsBadge = document.getElementById('settings-total-cost');
+  if (settingsBadge) settingsBadge.textContent = '$' + parseFloat(cost).toFixed(3);
 }
 
 // ---- Settings Logic ----
@@ -234,10 +236,10 @@ function init() {
         openSettings();
       }
     } catch (err) {
-      console.error("Error in init then:", err);
+      document.getElementById('chat-area').innerHTML += `<div style="color:red">INIT ERROR: ${err.message}</div>`;
     }
   }).catch(err => {
-    console.error("Error getting config:", err);
+    document.getElementById('chat-area').innerHTML += `<div style="color:red">GETCONFIG ERROR: ${err.message}</div>`;
   });
 }
 
