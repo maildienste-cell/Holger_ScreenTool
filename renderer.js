@@ -250,7 +250,7 @@ function addMessage(text, sender) {
   } else {
     try {
       const rawHtml = marked.parse(text);
-      msg.innerHTML = DOMPurify.sanitize(rawHtml);
+      msg.innerHTML = DOMPurify.sanitize(rawHtml, { ADD_ATTR: ['data-path', 'data-filename'] });
     } catch (e) {
       msg.textContent = text;
     }
@@ -258,6 +258,14 @@ function addMessage(text, sender) {
   chatArea.appendChild(msg);
   chatArea.scrollTop = chatArea.scrollHeight;
 }
+
+document.getElementById('chat-area').addEventListener('click', (e) => {
+  if (e.target.classList.contains('download-btn')) {
+    const path = e.target.getAttribute('data-path');
+    const filename = e.target.getAttribute('data-filename');
+    window.electronAPI.saveDocument(path, filename);
+  }
+});
 
 function renderSkills() {
   const container = document.getElementById('active-skills-container');

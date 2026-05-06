@@ -14,5 +14,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   takeInteractiveScreenshot: () => ipcRenderer.invoke('take-interactive-screenshot'),
   onModelDownloadRequired: (callback) => ipcRenderer.on('model-download-required', callback),
   onModelDownloadProgress: (callback) => ipcRenderer.on('model-download-progress', (_event, data) => callback(data)),
-  startModelDownload: () => ipcRenderer.send('start-model-download')
+  startModelDownload: () => ipcRenderer.send('start-model-download'),
+  saveDocument: (path, filename) => ipcRenderer.invoke('save-document', { path, filename })
 });

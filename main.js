@@ -608,6 +608,24 @@ ipcMain.handle('process-query', async (event, { query, screenshotPath, history =
         );
       }
 
+      tools.push(
+        {
+          type: "function",
+          function: {
+            name: "create_document",
+            description: "Erzeugt ein neues Dokument (z.B. Markdown, TXT, HTML, Python-Skript) mit dem angegebenen Inhalt und stellt es dem Nutzer zum Download bereit.",
+            parameters: {
+              type: "object",
+              properties: { 
+                filename: { type: "string", description: "Der gewünschte Dateiname inklusive Dateiendung (z.B. 'konzept.md' oder 'script.py')" },
+                content: { type: "string", description: "Der komplette Inhalt der Datei" }
+              },
+              required: ["filename", "content"]
+            }
+          }
+        }
+      );
+
       if (config.allowActions) {
         tools.push(
           {
@@ -735,6 +753,23 @@ ipcMain.handle('process-query', async (event, { query, screenshotPath, history =
               content: searchResults
             });
             toolResultsHtml += `<br><span style="opacity:0.6; font-size:11px;">*(Aktion: Preisvergleich für "${args.search_query}")*</span>`;
+          }
+          else if (toolCall.function.name === 'create_document') {
+            const args = JSON.parse(toolCall.function.arguments);
+            const tempPath = path.join(app.getPath('temp'), args.filename);
+            fs.writeFileSync(tempPath, args.content);
+            event.sender.send('agent-log', `Dokument erstellt: ${args.filename}`);
+            
+            toolResultsHtml += `<br><div style="margin-top: 8px; padding: 10px; background: rgba(52, 199, 89, 0.2); border: 1px solid #34c759; border-radius: 8px; display: flex; align-items: center; justify-content: space-between;">
+              <div>📄 <b>${args.filename}</b></div>
+              <button class="download-btn" data-path="${tempPath}" data-filename="${args.filename}" style="background: #34c759; color: white; border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-weight: bold;">Speichern</button>
+            </div>`;
+            
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: `Das Dokument wurde erfolgreich erstellt und dem Nutzer als Download angeboten.`
+            });
           }
           else if (toolCall.function.name === 'execute_applescript') {
             const args = JSON.parse(toolCall.function.arguments);
@@ -883,6 +918,19 @@ ipcMain.handle('save-config', async (event, config) => {
 
 ipcMain.handle('get-config', async (event) => {
   return await getConfig();
+});
+
+ipcMain.handle('save-document', async (event, { path: tempPath, filename }) => {
+  const { dialog } = require('electron');
+  const { filePath } = await dialog.showSaveDialog({
+    defaultPath: filename,
+    buttonLabel: 'Speichern'
+  });
+  if (filePath) {
+    fs.copyFileSync(tempPath, filePath);
+    return true;
+  }
+  return false;
 });
 
 ipcMain.on('close-window', () => window.hide());
