@@ -212,8 +212,6 @@ function createWindow() {
     shell.openExternal(url);
     return { action: 'deny' };
   });
-
-  window.webContents.openDevTools({ mode: 'detach' });
 }
 
 function toggleWindow() {
