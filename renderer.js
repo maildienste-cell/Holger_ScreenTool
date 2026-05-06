@@ -258,7 +258,7 @@ function addMessage(text, sender) {
   const msg = document.createElement('div');
   msg.className = `message ${sender}`;
   if (sender === 'user') {
-    msg.textContent = text;
+    msg.innerHTML = text; // Erlaubt HTML für angehängte Dateien im Text
   } else {
     try {
       const rawHtml = marked.parse(text);
@@ -267,8 +267,23 @@ function addMessage(text, sender) {
       msg.textContent = text;
     }
   }
+  
+  msg.addEventListener('click', (e) => {
+    if (window.getSelection().toString().length > 0) return;
+    if (e.target.tagName !== 'A' && e.target.tagName !== 'BUTTON' && !e.target.closest('button')) {
+      msg.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  });
+
   chatArea.appendChild(msg);
-  chatArea.scrollTop = chatArea.scrollHeight;
+  
+  // Custom scroll behavior based on sender
+  if (sender === 'agent') {
+    // Scroll to the top of the newly added agent message
+    msg.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  } else {
+    chatArea.scrollTop = chatArea.scrollHeight;
+  }
 }
 
 document.getElementById('chat-area').addEventListener('click', (e) => {
