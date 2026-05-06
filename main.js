@@ -613,12 +613,12 @@ ipcMain.handle('process-query', async (event, { query, screenshotPath, history =
           type: "function",
           function: {
             name: "create_document",
-            description: "Erzeugt ein neues Dokument (z.B. Markdown, TXT, HTML, Python-Skript) mit dem angegebenen Inhalt und stellt es dem Nutzer zum Download bereit.",
+            description: "WICHTIG: Erzeugt ein neues Dokument (z.B. RTF, Markdown, TXT, Code) und stellt es zum Download bereit. WICHTIG ZUR TOKEN-ERSPARNIS: Wenn der Nutzer ein Dokument verlangt, schreibe den Inhalt NIEMALS zuerst in den normalen Chat-Verlauf! Nutze sofort und ausschließlich dieses Tool, um den Text direkt in die Datei zu schreiben.",
             parameters: {
               type: "object",
               properties: { 
-                filename: { type: "string", description: "Der gewünschte Dateiname inklusive Dateiendung (z.B. 'konzept.md' oder 'script.py')" },
-                content: { type: "string", description: "Der komplette Inhalt der Datei" }
+                filename: { type: "string", description: "Der gewünschte Dateiname inklusive Dateiendung (z.B. 'konzept.rtf', 'brief.md' oder 'script.py')" },
+                content: { type: "string", description: "Der komplette, finale Inhalt der Datei (bei .rtf ggf. formatiert, ansonsten Markdown/Text)." }
               },
               required: ["filename", "content"]
             }
