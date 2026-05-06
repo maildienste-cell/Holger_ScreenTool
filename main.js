@@ -34,8 +34,7 @@ async function getConfig() {
   if (!config.imageQuality) config.imageQuality = 'standard';
   if (typeof config.totalCost !== 'number') config.totalCost = 0;
   if (!config.temperature && config.temperature !== 0) config.temperature = 0.5;
-  if (!config.customSkills || config.customSkills.length === 0) {
-    config.customSkills = [
+  const defaultSkills = [
       { id: 'screenchat', name: 'Screenchat (Screenshot)', prompt: 'SCREENCHAT: Du siehst den Bildschirm und beziehst dich in deinen Antworten auf den visuellen Kontext.' },
       { id: 'web', name: 'Webzugriff (Internet)', prompt: 'WEB-ACCESS: Du hast Zugriff aufs Internet. Suche aktiv nach aktuellen Informationen, wenn nötig.' },
       { id: 'programmer', name: 'Programmierer', prompt: 'PROGRAMMIERER: Du bist ein Senior Software Engineer. Schreibe sauberen, perfekten Code.' },
@@ -44,9 +43,18 @@ async function getConfig() {
       { id: 'influencer', name: 'Influencer (Slang)', prompt: 'INFLUENCER: Du bist ein überdrehter Gen-Z Influencer. Antworte extrem lustig, leicht ironisch und nutze übertrieben viel aktuellen Jugendslang (wie "cringe", "sus", "slay", "wild", "bro").' },
       { id: 'compact', name: 'Kompakt (Kurz & Knapp)', prompt: 'KOMPAKT: Liefere Antworten maximal komprimiert. Keine Begrüßungen, keine Höflichkeitsfloskeln, kein unnötiger Text. Nur die absolute, direkte Antwort oder Lösung in wenigen Worten.' },
       { id: 'tradingexpert', name: 'Trading Experte (Hebel/2%)', prompt: 'TRADING EXPERTE: Du bist ein professioneller Daytrader. Dein Ziel ist es, mir exakt zu sagen, WANN und WIE ich einsteigen soll. Das Ziel ist mindestens ein 2% Anstieg, damit ich hebeln kann. Du berechnest die Wahrscheinlichkeit für das Setup und das Chance-Risiko-Verhältnis (CRV). Bei deiner Analyse beachtest du zwingend: Stochastik, Price-Action, Momentum, Trendfolgen, Volumen und Liquidität.' },
-      { id: 'stockcheck', name: 'StockCheck (Chartanalyse)', prompt: 'STOCKCHECK: Du bist ein professioneller Daytrader und Chartanalyst. Analysiere die sichtbaren Chartinformationen im Screenshot. Antworte, was wahrscheinlicher ist: Long oder Short, und worauf zu achten ist. Ziel ist ein 2% Trade Minimum, der mit einem 10er Hebel umsetzbar ist. Gib das Chance-Risiko-Verhältnis (RCV/CRV) an. Betrachte immer die Price Action und die wahrscheinlichste Richtung für den Tag. Recherchiere zwingend aktuelle News zur Aktie und gib eine fundamentale Zusammenfassung (Fundamental Summary).' }
-    ];
+      { id: 'stockcheck', name: 'StockCheck (Chartanalyse)', prompt: 'STOCKCHECK: Du bist ein professioneller Daytrader und Chartanalyst. Analysiere die sichtbaren Chartinformationen im Screenshot. Antworte, was wahrscheinlicher ist: Long oder Short, und worauf zu achten ist. Ziel ist ein 2% Trade Minimum, der mit einem 10er Hebel umsetzbar ist. Gib das Chance-Risiko-Verhältnis (RCV/CRV) an. Betrachte immer die Price Action und die wahrscheinlichste Richtung für den Tag. Recherchiere zwingend aktuelle News zur Aktie und gib eine fundamentale Zusammenfassung (Fundamental Summary).' },
+      { id: 'mrbillig', name: 'Mr. Billig (Preisvergleich)', prompt: 'MR BILLIG: Du bist "Mr. Billig", der ultimative Einkaufsassistent! Deine Aufgabe ist es, für Produkte die günstigsten Preise im Internet zu finden. Du unterscheidest streng zwischen "Neu", "Gebraucht" und "Refurbished". Nutze zwingend das Tool "search_product_prices". Gib die Ergebnisse als ansprechende HTML-Kacheln (Tiles) aus. Jede Kachel MUSS das bereitgestellte Thumbnail-Bild, den Preis, den Zustand (Neu/Gebraucht/Refurbished), den Shop-Namen und einen Link (HTML <a> Tag) zur Quelle enthalten. Nutze CSS Flexbox für die Kacheln (z.B. <div style="display:flex; gap:10px; background:rgba(0,0,0,0.3); padding:10px; border-radius:8px; margin-bottom:10px;"><img src="URL" style="width:60px; height:60px; object-fit:cover; border-radius:6px;"><div>...</div></div>). Sei freundlich und extrem fokussiert auf Schnäppchen!' }
+  ];
+
+  if (!config.customSkills) config.customSkills = [];
+  
+  for (const ds of defaultSkills) {
+    if (!config.customSkills.find(s => s.id === ds.id)) {
+      config.customSkills.push(ds);
+    }
   }
+
   return config;
 }
 
@@ -212,6 +220,39 @@ async function performWebSearch(query) {
     return results.join('\n\n');
   } catch (e) {
     return "Fehler bei der Websuche: " + e.message;
+  }
+}
+
+// Produktsuche Tool (Mr. Billig)
+async function searchProductPrices(query) {
+  try {
+    const textSnippets = await performWebSearch(query + " preis kaufen ebay amazon");
+    
+    let imageUrl = "";
+    try {
+      const vqdRes = await fetch(`https://duckduckgo.com/?q=${encodeURIComponent(query)}&iax=images&ia=images`, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' }
+      });
+      const vqdHtml = await vqdRes.text();
+      const vqdMatch = vqdHtml.match(/vqd="([^"]+)"/);
+      if (vqdMatch) {
+        const imgRes = await fetch(`https://duckduckgo.com/i.js?q=${encodeURIComponent(query)}&o=json&vqd=${vqdMatch[1]}`, {
+          headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' }
+        });
+        const imgData = await imgRes.json();
+        if (imgData.results && imgData.results.length > 0) {
+          imageUrl = imgData.results[0].image;
+        }
+      }
+    } catch(e) {}
+    
+    return JSON.stringify({
+       info: "Hier sind Snippets aus dem Web mit Preisen. Erstelle daraus Produkt-Kacheln mit dem mitgelieferten Bild.",
+       web_results: textSnippets,
+       product_image_url: imageUrl || "https://dummyimage.com/200x200/cccccc/ffffff&text=Kein+Bild"
+    });
+  } catch (e) {
+    return "Fehler bei Produktsuche: " + e.message;
   }
 }
 
@@ -536,6 +577,23 @@ ipcMain.handle('process-query', async (event, { query, screenshotPath, history =
         );
       }
 
+      if (skills.includes('mrbillig')) {
+        tools.push(
+          {
+            type: "function",
+            function: {
+              name: "search_product_prices",
+              description: "Sucht im Internet nach aktuellen Preisen für ein Produkt und liefert Text-Snippets sowie eine passende Bild-URL für das Produkt zurück.",
+              parameters: {
+                type: "object",
+                properties: { search_query: { type: "string", description: "Der exakte Name des Produkts (z.B. 'iPhone 13 128GB')" } },
+                required: ["search_query"]
+              }
+            }
+          }
+        );
+      }
+
       if (config.allowActions) {
         tools.push(
           {
@@ -652,6 +710,17 @@ ipcMain.handle('process-query', async (event, { query, screenshotPath, history =
               content: searchResults
             });
             toolResultsHtml += `<br><span style="opacity:0.6; font-size:11px;">*(Aktion: Websuche nach "${args.search_query}")*</span>`;
+          }
+          else if (toolCall.function.name === 'search_product_prices') {
+            const args = JSON.parse(toolCall.function.arguments);
+            event.sender.send('agent-log', `Produktsuche nach: "${args.search_query}"`);
+            const searchResults = await searchProductPrices(args.search_query);
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: searchResults
+            });
+            toolResultsHtml += `<br><span style="opacity:0.6; font-size:11px;">*(Aktion: Preisvergleich für "${args.search_query}")*</span>`;
           }
           else if (toolCall.function.name === 'execute_applescript') {
             const args = JSON.parse(toolCall.function.arguments);
