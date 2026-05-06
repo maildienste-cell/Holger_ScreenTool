@@ -59,6 +59,8 @@ async function getConfig() {
     }
   }
 
+  config.version = app.getVersion();
+
   return config;
 }
 

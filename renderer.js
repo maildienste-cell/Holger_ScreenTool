@@ -135,6 +135,7 @@ async function openSettings() {
   document.getElementById('cfg-prompt').value = config.systemPrompt || '';
   document.getElementById('cfg-temperature').value = config.temperature ?? 0.5;
   document.getElementById('temp-val').textContent = document.getElementById('cfg-temperature').value;
+  document.getElementById('app-version').textContent = `v${config.version || '1.0.0'}`;
   updateCostUI(config.totalCost);
   
   customSkillsList = config.customSkills || [];
