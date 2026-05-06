@@ -106,7 +106,7 @@ document.getElementById('hide-btn').addEventListener('click', () => {
 
 if (window.electronAPI.onForceExpandedMode) {
   window.electronAPI.onForceExpandedMode(() => {
-    document.body.style.padding = '20px 20px 50px 20px'; // Restore padding
+    document.body.style.padding = '50px 50px 80px 50px'; // Restore padding
     document.getElementById('bubble-view').style.display = 'none';
     document.getElementById('settings-view').style.display = 'none';
     document.getElementById('logs-view').style.display = 'none';
@@ -146,6 +146,7 @@ async function openSettings() {
   document.getElementById('cfg-model').value = config.model || 'gpt-4o';
   document.getElementById('cfg-quality').value = config.imageQuality || 'standard';
   document.getElementById('cfg-actions').checked = config.allowActions || false;
+  document.getElementById('config-persona').value = config.agentPersona || '';
   document.getElementById('cfg-prompt').value = config.systemPrompt || '';
   document.getElementById('cfg-temperature').value = config.temperature ?? 0.5;
   document.getElementById('temp-val').textContent = document.getElementById('cfg-temperature').value;
@@ -210,10 +211,11 @@ document.getElementById('save-settings-btn').addEventListener('click', async () 
   const imageQuality = document.getElementById('cfg-quality').value;
   const allowActions = document.getElementById('cfg-actions').checked;
   const systemPrompt = document.getElementById('cfg-prompt').value.trim();
+  const agentPersona = document.getElementById('config-persona').value.trim();
   const temperature = parseFloat(document.getElementById('cfg-temperature').value);
   const customSkills = customSkillsList.filter(s => s.id && s.name && s.prompt);
   
-  await window.electronAPI.saveConfig({ apiKey, geminiApiKey, model, imageQuality, allowActions, systemPrompt, temperature, customSkills });
+  await window.electronAPI.saveConfig({ apiKey, geminiApiKey, model, imageQuality, allowActions, systemPrompt, agentPersona, temperature, customSkills });
   closeSettings();
   init(); // Reload skills UI
 });

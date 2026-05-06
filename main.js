@@ -191,8 +191,8 @@ function createTray() {
 
 function createWindow() {
   window = new BrowserWindow({
-    width: 420,
-    height: 720,
+    width: 480,
+    height: 780,
     show: false, frame: false, transparent: true, resizable: false, hasShadow: false,
     alwaysOnTop: true,
     webPreferences: {
@@ -226,8 +226,8 @@ async function showWindow() {
   const config = await getConfig();
   
   const { width, height, x, y } = screen.getPrimaryDisplay().workArea;
-  const winWidth = 420;
-  const winHeight = 720;
+  const winWidth = 480;
+  const winHeight = 780;
   const padding = 20;
   
   // Set position to bottom right corner
@@ -498,7 +498,8 @@ ipcMain.handle('process-query', async (event, { query, screenshotPath, history =
       }
     }
 
-    let basePrompt = config.systemPrompt || DEFAULT_PROMPT;
+    let basePrompt = config.agentPersona || DEFAULT_PROMPT;
+    if (config.systemPrompt) basePrompt += '\n\nZusätzliche System-Anweisungen:\n' + config.systemPrompt;
     let skillPrompt = "";
     
     if (skills.length > 0) {
@@ -1015,8 +1016,8 @@ ipcMain.on('set-window-mode', (event, mode) => {
     const newHeight = 80;
     window.setBounds({ x: right - newWidth, y: bottom - newHeight, width: newWidth, height: newHeight }, true);
   } else if (mode === 'expanded') {
-    const newWidth = 420;
-    const newHeight = 720;
+    const newWidth = 480;
+    const newHeight = 780;
     window.setBounds({ x: right - newWidth, y: bottom - newHeight, width: newWidth, height: newHeight }, true);
   }
 });

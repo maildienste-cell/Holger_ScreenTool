@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <style>
     body {
-      margin: 0; padding: 20px 20px 50px 20px;
+      margin: 0; padding: 50px 50px 80px 50px;
       background: transparent;
       font-family: -apple-system, BlinkMacSystemFont, sans-serif;
       overflow: hidden;
@@ -246,7 +246,11 @@
       <span style="font-size: 13px; color: rgba(255,255,255,0.8);">Gesamtkosten: <b id="settings-total-cost">$0.000</b></span>
       <button id="reset-cost-btn" style="padding: 6px 10px; font-size: 11px; background: rgba(255,59,48,0.5); border: none; border-radius: 6px; color: white; cursor: pointer; font-weight: bold;">Reset</button>
     </div>
-
+    <div class="setting-group">
+      <label for="config-persona">Agent Charakter / Persönlichkeit</label>
+      <textarea id="config-persona" placeholder="Du bist Franki, ein charmanter Begleiter..." style="min-height: 80px;"></textarea>
+    </div>
+    
     <div class="setting-group">
       <label>KI Modell</label>
       <select id="cfg-model">
