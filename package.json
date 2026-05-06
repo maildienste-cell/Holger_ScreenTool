@@ -1,6 +1,6 @@
 {
   "name": "desktop-mini-agent",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "description": "Desktop Mini Agent (Antigravity)",
   "author": "Holger",
   "main": "main.js",
