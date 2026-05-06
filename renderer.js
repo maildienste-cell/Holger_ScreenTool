@@ -27,8 +27,32 @@ if (SpeechRecognition) {
 
 window.electronAPI.onScreenshotTaken((path) => {
   currentScreenshot = path;
+  renderScreenshotBadge();
   document.getElementById('query-input').focus();
 });
+
+function renderScreenshotBadge() {
+  const container = document.getElementById('screenshot-preview-container');
+  if (!container) return;
+  if (!currentScreenshot) {
+    container.style.display = 'none';
+    container.innerHTML = '';
+    return;
+  }
+  container.style.display = 'flex';
+  const timestamp = new Date().getTime();
+  container.innerHTML = `
+    <div class="file-badge" style="padding: 2px 8px 2px 2px;">
+      <img src="file://${currentScreenshot}?t=${timestamp}" style="width: 24px; height: 24px; object-fit: cover; border-radius: 4px; margin-right: 4px;">
+      📸 Ausschnitt
+      <span id="remove-screenshot-btn" style="cursor: pointer; opacity: 0.6; font-size: 14px; font-weight: bold; margin-left: 6px;">&times;</span>
+    </div>
+  `;
+  document.getElementById('remove-screenshot-btn').addEventListener('click', () => {
+    currentScreenshot = '';
+    renderScreenshotBadge();
+  });
+}
 
 window.electronAPI.onAgentLog((msg) => {
   const logContent = document.getElementById('log-content');
@@ -58,7 +82,8 @@ document.getElementById('close-btn').addEventListener('click', () => {
   // Chat leeren
   document.getElementById('chat-area').innerHTML = '<div class="message agent">Ich sehe deinen Bildschirm. Was möchtest du wissen?</div>';
   chatHistory = [];
-  
+  currentScreenshot = '';
+  renderScreenshotBadge();
   window.electronAPI.closeWindow();
 });
 
@@ -66,6 +91,8 @@ document.getElementById('clear-chat-btn').addEventListener('click', () => {
   document.getElementById('chat-area').innerHTML = '<div class="message agent">Ich sehe deinen Bildschirm. Was möchtest du wissen?</div>';
   chatHistory = [];
   attachedFiles = [];
+  currentScreenshot = '';
+  renderScreenshotBadge();
   renderAttachedFiles();
 });
 
@@ -288,6 +315,7 @@ async function sendQuery() {
   
   const sentScreenshot = currentScreenshot;
   currentScreenshot = ''; // clear it for next prompt!
+  renderScreenshotBadge();
   
   const typingMsg = document.createElement('div');
   typingMsg.className = 'message agent';
