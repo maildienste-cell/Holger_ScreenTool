@@ -103,6 +103,16 @@ document.getElementById('hide-btn').addEventListener('click', () => {
   window.electronAPI.setWindowMode('bubble');
 });
 
+if (window.electronAPI.onForceExpandedMode) {
+  window.electronAPI.onForceExpandedMode(() => {
+    document.getElementById('bubble-view').style.display = 'none';
+    document.getElementById('settings-view').style.display = 'none';
+    document.getElementById('logs-view').style.display = 'none';
+    document.getElementById('main-view').style.display = 'flex';
+    init(); // Re-initialize config whenever window is opened
+  });
+}
+
 document.getElementById('bubble-click').addEventListener('click', () => {
   document.getElementById('bubble-view').style.display = 'none';
   document.getElementById('main-view').style.display = 'flex';
