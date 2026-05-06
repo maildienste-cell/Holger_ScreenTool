@@ -181,7 +181,15 @@ function createWindow() {
   window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
 
   window.loadFile('index.html');
-  // window.on('blur', () => window.hide()); ENTFERNT, damit das Fenster offen bleibt
+  
+  window.webContents.on('will-navigate', (e, url) => {
+    e.preventDefault();
+    shell.openExternal(url);
+  });
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    shell.openExternal(url);
+    return { action: 'deny' };
+  });
 }
 
 function toggleWindow() {
