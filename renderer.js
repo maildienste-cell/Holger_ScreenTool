@@ -4,26 +4,10 @@ let activeSkills = new Set(['screenchat', 'influencer', 'auto']);
 let attachedFiles = [];
 let customSkillsList = [];
 
-// Voice Recognition
-const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-let recognition = null;
-if (SpeechRecognition) {
-  recognition = new SpeechRecognition();
-  recognition.lang = 'de-DE';
-  recognition.interimResults = false;
-  recognition.maxAlternatives = 1;
-  recognition.onresult = (event) => {
-    const speechResult = event.results[0][0].transcript;
-    document.getElementById('query-input').value = speechResult;
-    sendQuery();
-  };
-  recognition.onerror = (event) => {
-    console.error('Speech recognition error', event.error);
-  };
-  recognition.onend = () => {
-    document.getElementById('mic-btn').style.color = '#aaa';
-  };
-}
+// Voice Recording
+let mediaRecorder = null;
+let audioChunks = [];
+let isRecording = false;
 
 window.electronAPI.onScreenshotTaken((path) => {
   currentScreenshot = path;
@@ -60,10 +44,34 @@ window.electronAPI.onAgentLog((msg) => {
   logContent.scrollTop = logContent.scrollHeight;
 });
 
+window.electronAPI.onSimulationStart(() => {
+  document.getElementById('simulation-animation').style.display = 'flex';
+});
+
+window.electronAPI.onSimulationEnd(() => {
+  document.getElementById('simulation-animation').style.display = 'none';
+});
+
 // Modal Logic
 window.electronAPI.onShowApproval((data) => {
   document.getElementById('approval-command').textContent = data.command;
   document.getElementById('approval-assessment').innerHTML = data.assessment.replace(/\n/g, '<br>');
+  
+  const indicator = document.getElementById('risk-indicator');
+  if (indicator) {
+     const text = data.assessment.toLowerCase();
+     if (text.includes('high') || text.includes('hoch') || text.includes('kritisch')) {
+       indicator.style.background = '#ff3b30';
+       indicator.style.boxShadow = '0 0 8px #ff3b30';
+     } else if (text.includes('medium') || text.includes('mittel') || text.includes('warnung')) {
+       indicator.style.background = '#ffcc00';
+       indicator.style.boxShadow = '0 0 8px #ffcc00';
+     } else {
+       indicator.style.background = '#34c759';
+       indicator.style.boxShadow = '0 0 8px #34c759';
+     }
+  }
+  
   document.getElementById('approval-modal').style.display = 'flex';
 });
 
@@ -83,6 +91,7 @@ document.getElementById('close-btn').addEventListener('click', () => {
   chatHistory = [];
   currentScreenshot = '';
   renderScreenshotBadge();
+  if (typeof updateContextHeatmap === 'function') updateContextHeatmap();
   window.electronAPI.closeWindow();
 });
 
@@ -93,6 +102,66 @@ document.getElementById('clear-chat-btn').addEventListener('click', () => {
   currentScreenshot = '';
   renderScreenshotBadge();
   renderAttachedFiles();
+  if (typeof updateContextHeatmap === 'function') updateContextHeatmap();
+});
+
+function updateContextHeatmap() {
+  const btn = document.getElementById('context-health-btn');
+  if (!btn) return;
+  // Maximum size tracked is 20. Map chatHistory length from 0 to 20 to hue from 120 (green) to 0 (red).
+  const ratio = Math.min(chatHistory.length / 20, 1); 
+  const hue = 120 - (ratio * 120);
+  btn.style.color = `hsl(${hue}, 100%, 50%)`;
+}
+
+document.getElementById('context-health-btn').addEventListener('click', async () => {
+  if (chatHistory.length === 0) return;
+  
+  const btn = document.getElementById('context-health-btn');
+  btn.style.opacity = '0.5';
+  btn.style.pointerEvents = 'none';
+  
+  const loadingMsg = document.createElement('div');
+  loadingMsg.className = 'message agent';
+  loadingMsg.innerHTML = '<i>🧠 Fasse aktuellen Kontext für die Übergabe zusammen...</i>';
+  document.getElementById('chat-area').appendChild(loadingMsg);
+  loadingMsg.scrollIntoView({ behavior: 'smooth' });
+  
+  const summaryPrompt = "Bitte fasse unseren kompletten bisherigen Chatverlauf sehr detailliert und präzise zusammen. Diese Zusammenfassung dient als exakte Übergabe (Handover) an deinen Nachfolger-Kontext, da der Speicher geleert wird. Nenne alle Fakten, getroffenen Entscheidungen, den aktuellen Stand und das, woran wir gerade gearbeitet haben. Antworte direkt und ausschließlich mit der Zusammenfassung.";
+  
+  try {
+    const response = await window.electronAPI.processQuery({ 
+      query: summaryPrompt, 
+      screenshotPath: '',
+      history: chatHistory,
+      skills: [], // Keine Skills übergeben, damit die Zusammenfassung rein sachlich bleibt
+      files: []
+    });
+    
+    loadingMsg.remove();
+    
+    if (response.error) {
+      addMessage("Fehler bei der Zusammenfassung: " + response.error, "agent");
+    } else {
+      const resetPrompt = `[SYSTEM-ÜBERGABE: Der Kontext wurde soeben geleert, um Token zu sparen. Hier ist die detaillierte Zusammenfassung unserer bisherigen Arbeit. Bitte nutze dieses Wissen und mache nahtlos an diesem Punkt weiter:]\n\n${response.text}`;
+      
+      chatHistory = [{ role: 'user', content: resetPrompt }];
+      
+      // UI komplett leeren, damit der alte Chat auch visuell verschwindet
+      document.getElementById('chat-area').innerHTML = '';
+      
+      addMessage(`🧠 <b>Kontext-Reset & Übergabe erfolgreich!</b><br><br><div style="font-size:12px; background:rgba(0,0,0,0.2); padding:10px; border-radius:8px; border:1px solid rgba(255,255,255,0.1); margin-top:8px;"><i>${response.text.replace(/\\n/g, '<br>')}</i></div>`, "agent");
+      
+      if (response.totalCost !== undefined) updateCostUI(response.totalCost);
+    }
+  } catch(e) {
+    loadingMsg.remove();
+    addMessage("Konnte Kontext nicht zusammenfassen: " + e.message, "agent");
+  }
+  
+  btn.style.opacity = '1';
+  btn.style.pointerEvents = 'auto';
+  updateContextHeatmap();
 });
 
 document.getElementById('hide-btn').addEventListener('click', () => {
@@ -145,7 +214,8 @@ async function openSettings() {
   document.getElementById('cfg-geminikey').value = config.geminiApiKey || '';
   document.getElementById('cfg-model').value = config.model || 'gpt-4o';
   document.getElementById('cfg-quality').value = config.imageQuality || 'standard';
-  document.getElementById('cfg-actions').checked = config.allowActions || false;
+  document.getElementById('cfg-assist-risk').value = config.assistRisk || 'guided';
+  document.getElementById('cfg-voice').value = config.voiceMode || 'openai';
   document.getElementById('config-persona').value = config.agentPersona || '';
   document.getElementById('cfg-prompt').value = config.systemPrompt || '';
   document.getElementById('cfg-temperature').value = config.temperature ?? 0.5;
@@ -209,13 +279,14 @@ document.getElementById('save-settings-btn').addEventListener('click', async () 
   const geminiApiKey = document.getElementById('cfg-geminikey').value.trim();
   const model = document.getElementById('cfg-model').value;
   const imageQuality = document.getElementById('cfg-quality').value;
-  const allowActions = document.getElementById('cfg-actions').checked;
+  const assistRisk = document.getElementById('cfg-assist-risk').value;
+  const voiceMode = document.getElementById('cfg-voice').value;
   const systemPrompt = document.getElementById('cfg-prompt').value.trim();
   const agentPersona = document.getElementById('config-persona').value.trim();
   const temperature = parseFloat(document.getElementById('cfg-temperature').value);
   const customSkills = customSkillsList.filter(s => s.id && s.name && s.prompt);
   
-  await window.electronAPI.saveConfig({ apiKey, geminiApiKey, model, imageQuality, allowActions, systemPrompt, agentPersona, temperature, customSkills });
+  await window.electronAPI.saveConfig({ apiKey, geminiApiKey, model, imageQuality, assistRisk, voiceMode, systemPrompt, agentPersona, temperature, customSkills });
   closeSettings();
   init(); // Reload skills UI
 });
@@ -394,14 +465,48 @@ async function sendQuery() {
     addMessage(`Fehler: ${response.error}`, 'agent');
   } else {
     addMessage(response.text, 'agent');
+    speakText(response.text);
     
     chatHistory.push({ role: 'user', content: query });
     chatHistory.push({ role: 'assistant', content: response.text });
     if (chatHistory.length > 20) chatHistory = chatHistory.slice(-20);
+    if (typeof updateContextHeatmap === 'function') updateContextHeatmap();
+    
+    if (chatHistory.length === 18) {
+      addMessage("⚠️ <span style='opacity: 0.8; font-size: 13px;'><i>System-Hinweis: Mein Kurzzeitgedächtnis ist fast voll (noch 10% Puffer übrig). Bitte klicke demnächst auf das rote Gehirn-Icon oben links, um eine nahtlose Übergabe in einen neuen Kontext zu starten.</i></span>", "agent");
+    }
   }
   
   if (response.totalCost !== undefined) {
     updateCostUI(response.totalCost);
+  }
+}
+
+async function speakText(text) {
+  const config = await window.electronAPI.getConfig();
+  const mode = config.voiceMode || 'openai';
+  
+  if (mode === 'none' || !text) return;
+  
+  const cleanText = text.replace(/\*/g, '').replace(/<[^>]+>/g, '').trim();
+  if (!cleanText) return;
+  
+  if (mode === 'local') {
+    const utterance = new SpeechSynthesisUtterance(cleanText);
+    utterance.lang = 'de-DE';
+    window.speechSynthesis.speak(utterance);
+  } else if (mode === 'openai') {
+    try {
+      const buffer = await window.electronAPI.synthesizeSpeech(cleanText);
+      if (buffer) {
+        const blob = new Blob([buffer], { type: 'audio/mpeg' });
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        audio.play();
+      }
+    } catch (e) {
+      console.error("OpenAI TTS Failed", e);
+    }
   }
 }
 
@@ -410,12 +515,51 @@ document.getElementById('query-input').addEventListener('keypress', (e) => {
   if (e.key === 'Enter') sendQuery();
 });
 
-document.getElementById('mic-btn').addEventListener('click', () => {
-  if (recognition) {
-    document.getElementById('mic-btn').style.color = '#ff3b30';
-    recognition.start();
-  } else {
-    alert("Spracherkennung wird in diesem Browser/System nicht unterstützt.");
+document.getElementById('mic-btn').addEventListener('click', async () => {
+  const micBtn = document.getElementById('mic-btn');
+  const queryInput = document.getElementById('query-input');
+
+  if (isRecording) {
+    mediaRecorder.stop();
+    micBtn.classList.remove('recording');
+    isRecording = false;
+    return;
+  }
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+    audioChunks = [];
+
+    mediaRecorder.ondataavailable = (event) => {
+      if (event.data.size > 0) audioChunks.push(event.data);
+    };
+
+    mediaRecorder.onstop = async () => {
+      stream.getTracks().forEach(track => track.stop());
+      const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+      const arrayBuffer = await audioBlob.arrayBuffer();
+      
+      queryInput.placeholder = "Transkribiere Audio...";
+      try {
+        const transcript = await window.electronAPI.transcribeAudio(arrayBuffer);
+        if (transcript) {
+          queryInput.value = (queryInput.value + (queryInput.value ? ' ' : '') + transcript).trim() + ' ';
+          sendQuery(); // Auto-send
+        }
+      } catch (err) {
+        console.error("Transcription error:", err);
+        alert("Fehler bei der Audio-Transkription:\\n" + (err.message || err));
+      }
+      queryInput.placeholder = "Frag mich was...";
+    };
+
+    mediaRecorder.start();
+    micBtn.classList.add('recording');
+    isRecording = true;
+  } catch (error) {
+    console.error("Microphone access denied or error:", error);
+    alert("Konnte nicht auf das Mikrofon zugreifen. Bitte Berechtigungen prüfen.");
   }
 });
 

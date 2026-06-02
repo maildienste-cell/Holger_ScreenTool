@@ -3,15 +3,24 @@ const path = require('path');
 const fs = require('fs');
 const https = require('https');
 const http = require('http');
-const { execSync, exec } = require('child_process');
+const { execSync, exec, spawn } = require('child_process');
 const util = require('util');
 const execAsync = util.promisify(exec);
 const fsPromises = require('fs').promises;
 const pdf = require('pdf-parse');
+const { runMiroFishSimulation } = require('./mirofish_orchestrator');
+const { mouse, keyboard, Point, Button, Key, straightTo } = require('@nut-tree-fork/nut-js');
+const FormData = require('form-data');
+
+// Configure nut.js
+mouse.config.mouseSpeed = 1500;
+mouse.config.autoDelayMs = 10;
 
 let tray = null;
 let window = null;
+let overlayWindow = null;
 let pendingApproval = null;
+let mirofishProcess = null;
 
 const DEFAULT_PROMPT = `Du bist "Franki", ein extrem charmanter, lockerer und hochintelligenter persönlicher KI-Buddy des Nutzers.
 Du begegnest dem Nutzer immer auf Augenhöhe, fast wie ein guter Freund. Sei hilfreich, kompetent, aber immer mit einer Prise Charme.
@@ -38,7 +47,7 @@ async function getConfig() {
   const debugLog = path.join(app.getPath('userData'), 'debug_app.txt');
   fs.appendFileSync(debugLog, `\n[${new Date().toISOString()}] getConfig called\n`);
   
-  let config = { apiKey: '', geminiApiKey: '', model: 'gpt-4o', allowActions: false, systemPrompt: DEFAULT_PROMPT, totalCost: 0 };
+  let config = { apiKey: '', geminiApiKey: '', model: 'gpt-4o', assistRisk: 'guided', systemPrompt: DEFAULT_PROMPT, totalCost: 0 };
   if (fs.existsSync(configPath)) {
     try {
       const raw = JSON.parse(await fsPromises.readFile(configPath, 'utf-8'));
@@ -72,14 +81,22 @@ async function getConfig() {
       { id: 'tradingexpert', name: 'Trading Experte (Hebel/2%)', prompt: 'TRADING EXPERTE: Du bist ein professioneller Daytrader. Dein Ziel ist es, mir exakt zu sagen, WANN und WIE ich einsteigen soll. Das Ziel ist mindestens ein 2% Anstieg, damit ich hebeln kann. Du berechnest die Wahrscheinlichkeit für das Setup und das Chance-Risiko-Verhältnis (CRV). Bei deiner Analyse beachtest du zwingend: Stochastik, Price-Action, Momentum, Trendfolgen, Volumen und Liquidität.' },
       { id: 'stockcheck', name: 'StockCheck (Chartanalyse)', prompt: 'STOCKCHECK: Du bist ein professioneller Daytrader und Chartanalyst. Analysiere die sichtbaren Chartinformationen im Screenshot. Antworte, was wahrscheinlicher ist: Long oder Short, und worauf zu achten ist. Ziel ist ein 2% Trade Minimum, der mit einem 10er Hebel umsetzbar ist. Gib das Chance-Risiko-Verhältnis (RCV/CRV) an. Betrachte immer die Price Action und die wahrscheinlichste Richtung für den Tag. Recherchiere zwingend aktuelle News zur Aktie und gib eine fundamentale Zusammenfassung (Fundamental Summary).' },
       { id: 'mrbillig', name: 'Mr. Billig (Preisvergleich)', prompt: 'MR BILLIG: Du bist "Mr. Billig", der ultimative Einkaufsassistent! Deine Aufgabe ist es, für Produkte die günstigsten Preise im Internet zu finden. Du unterscheidest streng zwischen "Neu", "Gebraucht" und "Refurbished". Nutze zwingend das Tool "search_product_prices". Gib die Ergebnisse als ansprechende HTML-Kacheln (Tiles) aus. Jede Kachel MUSS das bereitgestellte Thumbnail-Bild, den Preis, den Zustand, den Shop-Namen und einen funktionierenden Link (HTML <a> Tag) zum exakten Produkt enthalten. WICHTIG: Nutze als Link-Ziel (href) ZWINGEND die exakte URL (beginnt oft mit "https://..."), die im Text-Snippet als "[URL: ...]" angegeben ist! Verlinke niemals nur auf die Startseite des Shops. Nutze CSS Flexbox für die Kacheln (z.B. <div style="display:flex; gap:10px; background:rgba(0,0,0,0.3); padding:10px; border-radius:8px; margin-bottom:10px;"><img src="URL" style="width:60px; height:60px; object-fit:cover; border-radius:6px;"><div>...</div></div>).' },
-      { id: 'deepresearch', name: 'Deep Research (Tiefenrecherche)', prompt: 'DEEP RESEARCH: Deine Aufgabe ist die tiefgehende, autonome Recherche. Wenn der Nutzer eine Frage stellt, begnüge dich NICHT mit einer einzigen Websuche. Nutze das Websuche-Tool so oft wie nötig (3-5 Mal für verschiedene Aspekte des Themas). Führe einen iterativen Recherche-Loop durch: Suchen -> Lesen -> Neue Unterfragen suchen -> Lesen. Wenn du genügend Informationen gesammelt hast, erstellst du ein umfassendes, detailliertes Dossier. Nutze das "create_document" Tool, um das finale Dossier als Markdown-Datei (.md) zum Download bereitzustellen.' }
+      { id: 'deepresearch', name: 'Deep Research (Tiefenrecherche)', prompt: 'DEEP RESEARCH: Deine Aufgabe ist die tiefgehende, autonome Recherche. Wenn der Nutzer eine Frage stellt, begnüge dich NICHT mit einer einzigen Websuche. Nutze das Websuche-Tool so oft wie nötig (3-5 Mal für verschiedene Aspekte des Themas). Führe einen iterativen Recherche-Loop durch: Suchen -> Lesen -> Neue Unterfragen suchen -> Lesen. Wenn du genügend Informationen gesammelt hast, erstellst du ein umfassendes, detailliertes Dossier. Nutze das "create_document" Tool, um das finale Dossier als Markdown-Datei (.md) zum Download bereitzustellen.' },
+      { id: 'mirofish', name: 'MiroFish Lite (Schnelle Chat-Prognose)', prompt: 'MIROFISH PREDICTION ENGINE: Du bist MiroFish, eine AI-Prediction Engine. Deine Aufgabe ist es, durch die Simulation von "Digital Worlds" die Zukunft zu prognostizieren (insbesondere für Aktienkäufe). Simuliere parallel verschiedene Agenten (z.B. institutionelle Investoren, Retail-Trader, Marktanalysten, Regulatoren). Lasse diese Agenten aktuelle Marktnachrichten, Trends und geopolitische Faktoren diskutieren. Nutze Websuche-Tools, um aktuelle Daten zu sammeln. Erstelle nach der internen Simulation einen detaillierten Vorhersage-Bericht, der konkret benennt, welche Aktien heute am sinnvollsten zu kaufen sind, und warum die simulierten Dynamiken zu diesem Ergebnis führen.' },
+      { id: 'mirofish_full', name: 'MiroFish Full (Echte 10-Min Simulation)', prompt: 'Löst die echte Python MiroFish-Simulation im Hintergrund aus. Dauert 5-10 Minuten.' },
+      { id: 'assistenz', name: 'Assistenz (Maus & Tastatur)', prompt: 'ASSISTENZ: Du bist ein interaktiver Betriebssystem-Assistent. Du siehst den Bildschirm des Nutzers und hast Zugriff auf Maus und Tastatur. Deine primäre Aufgabe ist es, dem Nutzer aktiv durch Computer-Automatisierung zu helfen (z.B. klicken, Formulare ausfüllen). Nutze das Tool "execute_computer_action" für deine Aktionen. WICHTIG (SCRATCHPAD INTEGRATION): Bevor du eine Aktion ausführst, MUSST du zwingend in einem <scratchpad> Block laut nachdenken. Analysiere das Bild: Wo genau befindet sich das Ziel-Element? WICHTIG: Verwende für x und y immer relative Prozentwerte zwischen 0.000 und 1.000 (z.B. 0.5 für die Mitte). Schätze diese relativen Werte basierend auf der sichtbaren Position. Welche Aktionen sind nacheinander nötig? Begründe im Tool-Aufruf jede Aktion ("rationale") und ordne das "risk_level" ein ("high" für Kaufen, Löschen, Absenden; sonst "low"). Erst nach dem <scratchpad> Block darfst du das Tool aufrufen.' },
+      { id: 'mac_controller', name: 'Mac Controller (OpenClaw/OS-Agent)', prompt: 'MAC CONTROLLER: Du bist ein fortschrittlicher System-Assistent mit Zugriff auf ein lokales Open-Source Framework (wie OpenClaw) für die vollständige Mac-Steuerung. Deine Aufgabe ist es, High-Level-Ziele in Form von "Tasks" an das Framework zu delegieren, indem du das "execute_advanced_os_task" Tool verwendest. Erkläre dem User vorher in einem <scratchpad> Block grob den Plan.' }
   ];
 
   if (!config.customSkills) config.customSkills = [];
   
   for (const ds of defaultSkills) {
-    if (!config.customSkills.find(s => s.id === ds.id)) {
+    const existing = config.customSkills.find(s => s.id === ds.id);
+    if (!existing) {
       config.customSkills.push(ds);
+    } else if (ds.id === 'assistenz' && existing.prompt !== ds.prompt) {
+      // Force update assistenz prompt for scratchpad feature
+      existing.prompt = ds.prompt;
     }
   }
 
@@ -115,13 +132,63 @@ async function saveConfig(newConfig) {
   
   const toSave = { ...existing, ...newConfig };
   await fsPromises.writeFile(configPath, JSON.stringify(toSave));
+  
+  // Sync to MiroFish
+  try {
+    const miroEnvPath = '/Users/holgervoigt/Documents/SciPoly/DesktopMiniAgent/MiroFish/.env';
+    if (fs.existsSync(miroEnvPath)) {
+      let envContent = await fsPromises.readFile(miroEnvPath, 'utf-8');
+      
+      let rawKey = '';
+      if (toSave.model && toSave.model.startsWith('gemini') && toSave.geminiApiKey) {
+        rawKey = safeStorage.isEncryptionAvailable() ? safeStorage.decryptString(Buffer.from(toSave.geminiApiKey, 'base64')) : toSave.geminiApiKey;
+      } else if (toSave.apiKey) {
+        rawKey = safeStorage.isEncryptionAvailable() ? safeStorage.decryptString(Buffer.from(toSave.apiKey, 'base64')) : toSave.apiKey;
+      }
+      
+      if (rawKey) {
+        envContent = envContent.replace(/LLM_API_KEY=.*/g, `LLM_API_KEY=${rawKey}`);
+        await fsPromises.writeFile(miroEnvPath, envContent);
+      }
+    }
+  } catch (e) {
+    console.error("MiroFish Env Sync Error:", e);
+  }
 }
 
 app.dock.hide();
 
 app.whenReady().then(() => {
+  const { session } = require('electron');
+  session.defaultSession.setPermissionCheckHandler((webContents, permission) => {
+    if (permission === 'media') return true;
+    return false;
+  });
+  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
+    if (permission === 'media') return callback(true);
+    callback(false);
+  });
+
   createTray();
   createWindow();
+  createOverlayWindow();
+
+  // Start MiroFish Backend automatically
+  const mirofishDir = path.join(__dirname, 'MiroFish');
+  if (fs.existsSync(mirofishDir)) {
+    try {
+      mirofishProcess = spawn('npm', ['run', 'backend'], { cwd: mirofishDir, shell: true });
+      mirofishProcess.stdout.on('data', data => {
+        if (window) window.webContents.send('agent-log', `[MiroFish Backend] ${data.toString().trim()}`);
+      });
+      mirofishProcess.stderr.on('data', data => {
+        console.error(`[MiroFish Backend Error]: ${data}`);
+      });
+      console.log('MiroFish backend started.');
+    } catch(e) {
+      console.error("Failed to start MiroFish backend:", e);
+    }
+  }
 
   // Start local server for global context menus
   http.createServer(async (req, res) => {
@@ -149,6 +216,13 @@ app.whenReady().then(() => {
       res.end();
     }
   }).listen(14111, '127.0.0.1');
+});
+
+app.on('before-quit', () => {
+  if (mirofishProcess) {
+    console.log('Terminating MiroFish backend...');
+    mirofishProcess.kill();
+  }
 });
 
 app.on('window-all-closed', e => e.preventDefault());
@@ -189,6 +263,23 @@ function createTray() {
   });
 }
 
+function createOverlayWindow() {
+  overlayWindow = new BrowserWindow({
+    transparent: true,
+    frame: false,
+    alwaysOnTop: true,
+    hasShadow: false,
+    focusable: false,
+    webPreferences: {
+      nodeIntegration: true,
+      contextIsolation: false
+    }
+  });
+  
+  overlayWindow.setIgnoreMouseEvents(true, { forward: true });
+  overlayWindow.maximize();
+  overlayWindow.loadFile('overlay.html');
+}
 function createWindow() {
   window = new BrowserWindow({
     width: 480,
@@ -243,26 +334,36 @@ async function showWindow() {
 // Websuche via DuckDuckGo HTML
 async function performWebSearch(query) {
   try {
-    const res = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, {
+    const res = await fetch('https://lite.duckduckgo.com/lite/', {
+      method: 'POST',
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
-      }
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      },
+      body: `q=${encodeURIComponent(query)}&kl=&dt=`
     });
     const html = await res.text();
-    const regex = /<a class="result__snippet[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
-    let match;
     let results = [];
-    while ((match = regex.exec(html)) !== null && results.length < 5) {
-      let url = match[1];
-      if (url.startsWith('//')) url = 'https:' + url;
-      else if (url.startsWith('/')) url = 'https://duckduckgo.com' + url;
-      // duckduckgo URLs are often redirects (e.g. /l/?uddg=encoded_url)
-      if (url.includes('uddg=')) {
-        try { url = decodeURIComponent(url.split('uddg=')[1].split('&')[0]); } catch(e){}
+    
+    const blocks = html.split('<td valign="top">').slice(1);
+    for (const block of blocks) {
+      if (results.length >= 5) break;
+      const urlMatch = block.match(/<a[^>]*href=['"]([^'"]+)['"][^>]*class=['"]result-link['"]/);
+      const snippetMatch = block.match(/<td[^>]*class=['"]result-snippet['"][^>]*>([\s\S]*?)<\/td>/);
+      
+      if (urlMatch && snippetMatch) {
+        let url = urlMatch[1];
+        if (url.includes('y.js?ad_domain')) continue; // Skip sponsored
+        if (url.startsWith('//')) url = 'https:' + url;
+        else if (url.startsWith('/')) url = 'https://duckduckgo.com' + url;
+        if (url.includes('uddg=')) {
+          try { url = decodeURIComponent(url.split('uddg=')[1].split('&')[0]); } catch(e){}
+        }
+        const text = snippetMatch[1].replace(/<[^>]*>?/gm, '').trim();
+        results.push(`[URL: ${url}]\n${text}`);
       }
-      const text = match[2].replace(/<[^>]*>?/gm, '').trim();
-      results.push(`[URL: ${url}]\n${text}`);
     }
+    
     if (results.length === 0) return "Keine Suchergebnisse gefunden.";
     return results.join('\n\n');
   } catch (e) {
@@ -425,6 +526,10 @@ ipcMain.handle('process-query', async (event, { query, screenshotPath, history =
     const isGemini = selectedModel.startsWith('gemini');
     const isLocal = selectedModel.startsWith('local-');
 
+    if (skills.includes('mirofish_full')) {
+      return await runMiroFishSimulation(query, event);
+    }
+
     if (!isGemini && !isLocal && !config.apiKey) return { error: 'Kein OpenAI API Key gefunden. Bitte in den Einstellungen eintragen.' };
     if (isGemini && !config.geminiApiKey) return { error: 'Kein Gemini API Key gefunden. Bitte in den Einstellungen eintragen.' };
 
@@ -464,7 +569,7 @@ ipcMain.handle('process-query', async (event, { query, screenshotPath, history =
     }
     skills = finalSkills;
 
-    const useScreenshot = skills.includes('screenchat') && config.imageQuality !== 'none';
+    const useScreenshot = (skills.includes('screenchat') || skills.includes('assistenz')) && config.imageQuality !== 'none';
     let base64Image = '';
     
     if (screenshotPath && fs.existsSync(screenshotPath)) {
@@ -502,17 +607,32 @@ ipcMain.handle('process-query', async (event, { query, screenshotPath, history =
     if (config.systemPrompt) basePrompt += '\n\nZusätzliche System-Anweisungen:\n' + config.systemPrompt;
     let skillPrompt = "";
     
+    // Check for heavy persona overrides (MiroFish Lite)
+    let hasMirofishOverride = false;
+    let mirofishPrompt = "";
+
     if (skills.length > 0) {
       skillPrompt += "\n\nAKTIVE SKILLS UND ROLLEN:\n";
       if (config.customSkills) {
         for (const cs of config.customSkills) {
           if (skills.includes(cs.id)) {
-            skillPrompt += `- ${cs.name.toUpperCase()}: ${cs.prompt}\n`;
+            if (cs.id === 'mirofish' || cs.id === 'mirofish_lite') {
+              hasMirofishOverride = true;
+              mirofishPrompt = cs.prompt;
+            } else {
+              skillPrompt += `- ${cs.name.toUpperCase()}: ${cs.prompt}\n`;
+            }
           }
         }
       }
     }
-    const promptText = basePrompt + skillPrompt;
+    
+    let promptText = "";
+    if (hasMirofishOverride) {
+      promptText = mirofishPrompt + "\n\n(Ignoriere deine Standard-Programmierung als Assistent. Du bist jetzt exklusiv diese Persona und simulierst die Engine.)\n" + skillPrompt;
+    } else {
+      promptText = basePrompt + skillPrompt;
+    }
     
     let fileContentsText = "";
     if (files && files.length > 0) {
@@ -632,7 +752,7 @@ ipcMain.handle('process-query', async (event, { query, screenshotPath, history =
       messages.push({ role: 'user', content: userContent });
 
       let tools = [];
-      if (skills.includes('web') || skills.includes('stockcheck') || skills.includes('tradingexpert') || skills.includes('deepresearch')) {
+      if (skills.includes('web') || skills.includes('stockcheck') || skills.includes('tradingexpert') || skills.includes('deepresearch') || skills.includes('mirofish')) {
         tools.push(
           {
             type: "function",
@@ -696,7 +816,7 @@ ipcMain.handle('process-query', async (event, { query, screenshotPath, history =
         }
       );
 
-      if (config.allowActions) {
+      if (true) {
         tools.push(
           {
             type: "function",
@@ -733,9 +853,65 @@ ipcMain.handle('process-query', async (event, { query, screenshotPath, history =
                   file_path: { type: "string", description: "Absoluter Pfad zur Datei." },
                   search_string: { type: "string", description: "Text, der gesucht werden soll." },
                   replacement_string: { type: "string", description: "Text, der eingefügt werden soll." },
-                  content: { type: "string", description: "Kompletter neuer Inhalt (nur nutzen, wenn die Datei komplett überschrieben werden soll)." }
+                  content: { type: "string", description: "Kompletter Datei-Inhalt bei Überschreiben." }
                 },
                 required: ["file_path"]
+              }
+            }
+          }
+        );
+      }
+
+      if (skills.includes('assistenz')) {
+        tools.push(
+          {
+            type: "function",
+            function: {
+              name: "execute_computer_action",
+              description: "Führt eine Serie von Maus- und Tastaturaktionen auf dem Computer aus. Nutze dies, um UI-Elemente zu bedienen.",
+              parameters: {
+                type: "object",
+                properties: { 
+                  actions: { 
+                    type: "array", 
+                    description: "Eine Liste von Aktionen, die nacheinander ausgeführt werden.",
+                    items: {
+                      type: "object",
+                      properties: {
+                        action: { type: "string", description: "Typ der Aktion: 'move' (Maus bewegen), 'click' (Maus klicken), 'type' (Text tippen)." },
+                        x: { type: "number", description: "Relative X-Koordinate als Prozentwert zwischen 0.000 und 1.000 (nur für 'move')" },
+                        y: { type: "number", description: "Relative Y-Koordinate als Prozentwert zwischen 0.000 und 1.000 (nur für 'move')" },
+                        button: { type: "string", description: "Maustaste: 'left', 'right' oder 'double' (nur für 'click', standard ist 'left')" },
+                        text: { type: "string", description: "Der zu tippende Text (nur für 'type')" },
+                        press_enter: { type: "boolean", description: "Soll am Ende Enter gedrückt werden? (nur für 'type')" },
+                        rationale: { type: "string", description: "Kurze Begründung für diese Aktion (wird im Audit-Log gespeichert)" },
+                        risk_level: { type: "string", enum: ["low", "high"], description: "Klassifiziere die Aktion. 'high' für Kaufen, Löschen, Absenden; sonst 'low'" }
+                      },
+                      required: ["action", "rationale", "risk_level"]
+                    }
+                  }
+                },
+                required: ["actions"]
+              }
+            }
+          }
+        );
+      }
+
+      if (skills.includes('mac_controller')) {
+        tools.push(
+          {
+            type: "function",
+            function: {
+              name: "execute_advanced_os_task",
+              description: "Delegiert eine komplexe Aufgabe an ein externes Open-Source Framework (wie OpenClaw/OS-Copilot) zur Mac-Steuerung. Das Framework wird autonom versuchen, die Aufgabe auf dem Desktop zu lösen.",
+              parameters: {
+                type: "object",
+                properties: { 
+                  task_description: { type: "string", description: "Die genaue Beschreibung der Aufgabe, die das Framework lösen soll (z.B. 'Öffne Systemeinstellungen und setze den Darkmode')." },
+                  rationale: { type: "string", description: "Kurze Begründung, warum dieses Framework für die Aufgabe benötigt wird." }
+                },
+                required: ["task_description", "rationale"]
               }
             }
           }
@@ -950,6 +1126,158 @@ ipcMain.handle('process-query', async (event, { query, screenshotPath, history =
             
             messages.push({ role: 'tool', tool_call_id: toolCall.id, content: editResult });
           }
+          else if (toolCall.function.name === 'execute_computer_action') {
+            const args = JSON.parse(toolCall.function.arguments);
+            const actions = args.actions || [];
+            let resultLog = [];
+            let blocked = false;
+            
+            for (let act of actions) {
+              if (blocked) break;
+              
+              // Coordinate scaling for Retina
+              let targetX = act.x;
+              let targetY = act.y;
+              if (act.action === 'move' && act.x !== undefined && act.y !== undefined) {
+                if (act.x <= 1.0 && act.y <= 1.0) {
+                  const bounds = screen.getPrimaryDisplay().bounds;
+                  targetX = Math.round(act.x * bounds.width);
+                  targetY = Math.round(act.y * bounds.height);
+                }
+              }
+              
+              let needsApproval = false;
+              if (config.assistRisk === 'guided') needsApproval = true;
+              else if (config.assistRisk === 'assist' && act.risk_level === 'high') needsApproval = true;
+              
+              let desc = "";
+              if (act.action === 'move') desc = `Maus zu X:${targetX}, Y:${targetY}`;
+              else if (act.action === 'click') desc = `Mausklick (${act.button || 'left'})`;
+              else if (act.action === 'type') desc = `Tippen: "${act.text}"` + (act.press_enter ? ' + Enter' : '');
+              
+              let shortDesc = desc;
+              if (act.rationale) desc += `\nGrund: ${act.rationale}`;
+
+              event.sender.send('agent-log', `[ASSISTENZ] Führe aus: ${desc}`);
+              
+              try {
+                 const logLine = `${new Date().toISOString()} | ${act.action} | Risk: ${act.risk_level || 'low'} | Rationale: ${act.rationale || 'none'}\n`;
+                 require('fs').appendFileSync(path.join(app.getPath('userData'), 'audit.log'), logLine);
+              } catch(e) {}
+              
+              if (overlayWindow) overlayWindow.webContents.send('set-status', `⚙️ Ausführen: ${shortDesc}`);
+
+              if (overlayWindow && (act.action === 'move' || targetX !== undefined)) {
+                let px = targetX || 0;
+                let py = targetY || 0;
+                if (act.action !== 'move') {
+                   try {
+                     const p = await mouse.getPosition();
+                     px = p.x; py = p.y;
+                   } catch(e) {}
+                }
+                overlayWindow.webContents.send('draw-pointer', { x: px, y: py, label: shortDesc });
+              }
+              
+              if (needsApproval) {
+                if (overlayWindow) overlayWindow.webContents.send('set-status', `⚠️ Warten auf Bestätigung`);
+                event.sender.send('show-approval-popup', { command: `Aktion ausführen:\n${desc}`, assessment: `Risikolevel: ${act.risk_level || 'low'}` });
+                const isApproved = await new Promise((resolve) => pendingApproval = resolve);
+                if (!isApproved) {
+                  blocked = true;
+                  resultLog.push(`${shortDesc} -> BLOCKIERT`);
+                  toolResultsHtml += `<br><span style="color:#ff3b30; font-size:11px;">*(Aktion blockiert)*</span>`;
+                  if (overlayWindow) overlayWindow.webContents.send('set-status', `❌ Aktion blockiert`);
+                  break;
+                }
+              }
+
+              try {
+                if (act.action === 'move') {
+                  await mouse.move(straightTo(new Point(targetX, targetY)));
+                } else if (act.action === 'click') {
+                  if (overlayWindow) {
+                     const p = await mouse.getPosition();
+                     overlayWindow.webContents.send('trigger-ripple', {x: p.x, y: p.y});
+                  }
+                  if (act.button === 'right') await mouse.click(Button.RIGHT);
+                  else if (act.button === 'double') await mouse.doubleClick(Button.LEFT);
+                  else await mouse.click(Button.LEFT);
+                } else if (act.action === 'type') {
+                  await keyboard.type(act.text);
+                  if (act.press_enter) await keyboard.type(Key.Enter);
+                }
+                resultLog.push(`${shortDesc} -> ERFOLG`);
+                toolResultsHtml += `<br><span style="color:#34c759; font-size:11px;">*(Aktion: ${shortDesc})*</span>`;
+              } catch(e) {
+                resultLog.push(`${shortDesc} -> FEHLER: ${e.message}`);
+              }
+            }
+            
+            messages.push({ role: 'tool', tool_call_id: toolCall.id, content: resultLog.join('\n') });
+            
+            // Auto-Screenshot Feedback Loop
+            try {
+              event.sender.send('agent-log', `[ASSISTENZ] Erfasse neuen Bildschirmzustand...`);
+              const tmpShot = path.join(app.getPath('temp'), 'auto_screenshot.jpg');
+              await execAsync(`screencapture -x "${tmpShot}"`);
+              await execAsync(`sips -s format jpeg -s formatOptions 60 -Z 1600 "${tmpShot}" --out "${tmpShot}"`);
+              const b64 = require('fs').readFileSync(tmpShot, {encoding: 'base64'});
+              messages.push({
+                role: 'user',
+                content: [
+                  { type: 'text', text: "Das ist der neue Bildschirmzustand nach deiner letzten Aktion. Wenn die Aufgabe noch nicht abgeschlossen ist, plane die nächsten Schritte. Wenn sie abgeschlossen ist, antworte dem Nutzer." },
+                  { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${b64}` } }
+                ]
+              });
+            } catch(e) {
+              console.error("Auto-Screenshot failed", e);
+            }
+          }
+          else if (toolCall.function.name === 'execute_advanced_os_task') {
+            const args = JSON.parse(toolCall.function.arguments);
+            const task_description = args.task_description;
+            const rationale = args.rationale;
+            
+            event.sender.send('agent-log', `[MAC CONTROLLER] Plane Task: ${task_description}`);
+            if (overlayWindow) overlayWindow.webContents.send('set-status', `⚙️ OpenClaw Task: ${task_description.substring(0, 30)}...`);
+            
+            let blocked = false;
+            let resultMessage = "";
+            
+            // Immer Approval einholen (Kontrollierte Ausführung!)
+            if (overlayWindow) overlayWindow.webContents.send('set-status', `⚠️ Warten auf Bestätigung`);
+            event.sender.send('show-approval-popup', { 
+              command: `OpenClaw / OS-Copilot Task ausführen:\n${task_description}`, 
+              assessment: `Begründung: ${rationale}\nAchtung: Das Framework agiert autonom und übernimmt die Maus!` 
+            });
+            const isApproved = await new Promise((resolve) => pendingApproval = resolve);
+            
+            if (!isApproved) {
+              blocked = true;
+              resultMessage = "Der Nutzer hat die Ausführung des Tasks durch das Framework blockiert.";
+              toolResultsHtml += `<br><span style="color:#ff3b30; font-size:11px;">*(OpenClaw Task blockiert)*</span>`;
+              if (overlayWindow) overlayWindow.webContents.send('set-status', `❌ Aktion blockiert`);
+            } else {
+              try {
+                event.sender.send('agent-log', `[MAC CONTROLLER] Starte Framework für Task... Dies kann einige Minuten dauern.`);
+                const execPromise = require('util').promisify(require('child_process').exec);
+                // Wir wrappen OpenClaw via npx (kann bei Bedarf auf ein lokales Python-Script wie OS-Copilot angepasst werden)
+                // Hier simulieren/integrieren wir OpenClaw als Standardausführung
+                const cmd = `npx --yes openclaw prompt "${task_description.replace(/"/g, '\\"')}"`; 
+                const { stdout, stderr } = await execPromise(cmd, { timeout: 300000 }); // 5 min timeout
+                
+                resultMessage = `Framework Ausführung erfolgreich:\\nSTDOUT:\\n${stdout}\\nSTDERR:\\n${stderr}`;
+                toolResultsHtml += `<br><span style="color:#34c759; font-size:11px;">*(OpenClaw Task beendet)*</span>`;
+                if (overlayWindow) overlayWindow.webContents.send('set-status', `✅ OpenClaw Task beendet`);
+              } catch (e) {
+                resultMessage = `Fehler bei der Framework-Ausführung: ${e.message}`;
+                toolResultsHtml += `<br><span style="color:#ffcc00; font-size:11px;">*(OpenClaw Fehler: ${e.message})*</span>`;
+                if (overlayWindow) overlayWindow.webContents.send('set-status', `❌ OpenClaw Fehler`);
+              }
+            }
+            messages.push({ role: 'tool', tool_call_id: toolCall.id, content: resultMessage });
+          }
         }
 
         // 2. Request an OpenAI mit den Tool-Ergebnissen
@@ -1041,6 +1369,63 @@ ipcMain.handle('take-interactive-screenshot', async (event) => {
   showWindow();
   if (window) window.webContents.send('screenshot-taken', screenshotPath);
   return true;
+});
+
+ipcMain.handle('transcribe-audio', async (event, arrayBuffer) => {
+  const config = await getConfig();
+  if (!config.apiKey) throw new Error("OpenAI API Key fehlt für Sprachsteuerung.");
+  
+  const buffer = Buffer.from(arrayBuffer);
+  const formData = new FormData();
+  formData.append('file', buffer, { filename: 'audio.webm', contentType: 'audio/webm' });
+  formData.append('model', 'whisper-1');
+  formData.append('language', 'de');
+  
+  const fetch = require('node-fetch');
+  const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${config.apiKey}`,
+      ...formData.getHeaders()
+    },
+    body: formData
+  });
+  
+  if (!res.ok) {
+    const err = await res.text();
+    console.error("Whisper Error:", err);
+    throw new Error("Whisper API: " + err);
+  }
+  
+  const data = await res.json();
+  return data.text;
+});
+
+ipcMain.handle('synthesize-speech', async (event, text) => {
+  const config = await getConfig();
+  if (!config.apiKey) return null;
+  
+  const fetch = require('node-fetch');
+  const res = await fetch('https://api.openai.com/v1/audio/speech', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${config.apiKey}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      model: 'tts-1',
+      input: text,
+      voice: 'nova'
+    })
+  });
+  
+  if (!res.ok) {
+    console.error("TTS Error:", await res.text());
+    return null;
+  }
+  
+  const arrayBuffer = await res.arrayBuffer();
+  return arrayBuffer;
 });
 
 ipcMain.on('start-model-download', async (event) => {

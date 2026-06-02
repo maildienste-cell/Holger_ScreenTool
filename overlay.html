@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    body, html {
+      margin: 0; padding: 0; width: 100%; height: 100%;
+      background-color: transparent !important;
+      overflow: hidden;
+      pointer-events: none;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+    
+    .pointer-marker {
+      position: absolute;
+      width: 40px;
+      height: 40px;
+      border: 4px solid #ffcc00; /* Gelber Ring */
+      border-radius: 50%;
+      transform: translate(-50%, -50%);
+      pointer-events: none;
+      animation: pulse 1.5s infinite;
+      box-shadow: 0 0 15px rgba(255, 204, 0, 0.6);
+      z-index: 9999;
+    }
+
+    .pointer-label {
+      position: absolute;
+      background: rgba(0,0,0,0.85);
+      color: white;
+      padding: 6px 10px;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 500;
+      pointer-events: none;
+      transform: translate(24px, -24px);
+      box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+      border: 1px solid rgba(255,255,255,0.1);
+    }
+
+    @keyframes pulse {
+      0% { transform: translate(-50%, -50%) scale(0.8); opacity: 1; }
+      50% { transform: translate(-50%, -50%) scale(1.2); opacity: 0.8; }
+      100% { transform: translate(-50%, -50%) scale(0.8); opacity: 1; }
+    }
+
+    .ripple {
+      position: absolute;
+      border-radius: 50%;
+      background: rgba(255, 204, 0, 0.4);
+      transform: translate(-50%, -50%) scale(0);
+      animation: rippleAnim 0.6s ease-out forwards;
+      pointer-events: none;
+      z-index: 9998;
+    }
+
+    @keyframes rippleAnim {
+      0% { width: 0; height: 0; opacity: 1; }
+      100% { width: 100px; height: 100px; opacity: 0; }
+    }
+
+    #status-panel {
+      position: absolute;
+      bottom: 20px;
+      right: 20px;
+      background: rgba(0,0,0,0.85);
+      backdrop-filter: blur(10px);
+      color: white;
+      padding: 12px 18px;
+      border-radius: 12px;
+      font-size: 14px;
+      font-weight: 500;
+      pointer-events: none;
+      box-shadow: 0 8px 16px rgba(0,0,0,0.3);
+      border: 1px solid rgba(255,255,255,0.15);
+      transition: opacity 0.3s;
+      opacity: 0;
+      z-index: 10000;
+      max-width: 300px;
+    }
+  </style>
+</head>
+<body>
+  <div id="status-panel"></div>
+
+  <script>
+    const { ipcRenderer } = require('electron');
+
+    const statusPanel = document.getElementById('status-panel');
+    let statusTimeout;
+
+    ipcRenderer.on('set-status', (event, text) => {
+      statusPanel.innerText = text;
+      statusPanel.style.opacity = '1';
+      clearTimeout(statusTimeout);
+      // Hide after 5 seconds if no new status
+      statusTimeout = setTimeout(() => {
+        statusPanel.style.opacity = '0';
+      }, 5000);
+    });
+
+    ipcRenderer.on('draw-pointer', (event, data) => {
+      // Remove old markers
+      document.querySelectorAll('.pointer-marker, .pointer-label').forEach(e => e.remove());
+      
+      const marker = document.createElement('div');
+      marker.className = 'pointer-marker';
+      marker.style.left = data.x + 'px';
+      marker.style.top = data.y + 'px';
+      
+      if (data.label) {
+        const label = document.createElement('div');
+        label.className = 'pointer-label';
+        label.innerText = data.label;
+        label.style.left = data.x + 'px';
+        label.style.top = data.y + 'px';
+        document.body.appendChild(label);
+      }
+      
+      document.body.appendChild(marker);
+      
+      setTimeout(() => {
+        if (marker.parentNode) marker.remove();
+        if (data.label && label && label.parentNode) label.remove();
+      }, 3000);
+    });
+    
+    ipcRenderer.on('trigger-ripple', (event, data) => {
+      const ripple = document.createElement('div');
+      ripple.className = 'ripple';
+      ripple.style.left = data.x + 'px';
+      ripple.style.top = data.y + 'px';
+      document.body.appendChild(ripple);
+      
+      setTimeout(() => {
+        if (ripple.parentNode) ripple.remove();
+      }, 1000);
+    });
+
+    ipcRenderer.on('clear-pointer', () => {
+      document.querySelectorAll('.pointer-marker, .pointer-label').forEach(e => e.remove());
+    });
+  </script>
+</body>
+</html>
