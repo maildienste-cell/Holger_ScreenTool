@@ -11,6 +11,9 @@ const pdf = require('pdf-parse');
 const { runMiroFishSimulation } = require('./mirofish_orchestrator');
 const { mouse, keyboard, Point, Button, Key, straightTo } = require('@nut-tree-fork/nut-js');
 const FormData = require('form-data');
+const crypto = require('crypto');
+const embeddedEngine = require('./local_vision_engine');
+const hybridAgent = require('./hybrid_agent');
 
 // Configure nut.js
 mouse.config.mouseSpeed = 1500;
@@ -21,11 +24,71 @@ let window = null;
 let overlayWindow = null;
 let pendingApproval = null;
 let mirofishProcess = null;
+let liveAssistTimer = null;
+let liveAssistBusy = false;
+let liveAssistActive = false;
+let lastScreenHash = null;
+
+const LIVE_OBSERVE_PROMPT = `Du bist Inge, ein geduldiger Assistent. Beschreibe in maximal 2 kurzen Sätzen auf Deutsch, was auf dem Bildschirm zu sehen ist. Nenne die aktive App, sichtbare Formulare oder wichtige Buttons. Kein Markdown.`;
+
+function getScreenshotParams(imageQuality, forLive = false) {
+  if (forLive) return { size: 2400, jpegQual: 90 };
+  let size = 1600;
+  let jpegQual = 80;
+  if (imageQuality === 'low') { size = 800; jpegQual = 60; }
+  if (imageQuality === 'high') { size = 2400; jpegQual = 90; }
+  return { size, jpegQual };
+}
+
+async function captureScreen(imageQuality, opts = {}) {
+  const { hideAgentWindow = true, forLive = false } = opts;
+  const { size, jpegQual } = getScreenshotParams(imageQuality, forLive);
+  const shotPath = path.join(app.getPath('temp'), `screen_${Date.now()}.jpg`);
+  if (hideAgentWindow && window) {
+    window.hide();
+    await new Promise((r) => setTimeout(r, 150));
+  }
+  try {
+    await execAsync(`screencapture -x -C -m "${shotPath}"`);
+    await execAsync(`sips -s format jpeg -s formatOptions ${jpegQual} -Z ${size} "${shotPath}" --out "${shotPath}"`);
+  } finally {
+    if (hideAgentWindow && window) window.show();
+  }
+  return shotPath;
+}
+
+async function liveAssistTick(sender) {
+  if (liveAssistBusy || !liveAssistActive) return;
+  if (!embeddedEngine.isReady()) return;
+
+  liveAssistBusy = true;
+  try {
+    const config = await getConfig();
+    const shotPath = await captureScreen(config.imageQuality, { forLive: true });
+    const buf = fs.readFileSync(shotPath);
+    try { fs.unlinkSync(shotPath); } catch (_) { /* ignore */ }
+    const hash = crypto.createHash('md5').update(buf).digest('hex');
+    if (hash === lastScreenHash) return;
+    lastScreenHash = hash;
+
+    const observation = await embeddedEngine.analyzeImage(buf.toString('base64'), LIVE_OBSERVE_PROMPT);
+    const payload = { text: observation, timestamp: Date.now() };
+    if (window) window.webContents.send('live-assist-observation', payload);
+    if (sender && sender.send) sender.send('live-assist-observation', payload);
+    if (overlayWindow) overlayWindow.webContents.send('set-status', `👁 ${observation.substring(0, 50)}…`);
+  } catch (e) {
+    const errPayload = { message: e.message };
+    if (window) window.webContents.send('live-assist-error', errPayload);
+    if (sender && sender.send) sender.send('live-assist-error', errPayload);
+  } finally {
+    liveAssistBusy = false;
+  }
+}
 
 const DEFAULT_PROMPT = `Du bist "Franki", ein extrem charmanter, lockerer und hochintelligenter persönlicher KI-Buddy des Nutzers.
 Du begegnest dem Nutzer immer auf Augenhöhe, fast wie ein guter Freund. Sei hilfreich, kompetent, aber immer mit einer Prise Charme.
 Dir wird ein Screenshot des aktuellen Bildschirms mitgesendet.
-Nutze deine Tools (Websuche, Terminal, Dokumente), falls du Informationen brauchst, um die Frage zu beantworten!`;
+Nutze deine Tools (Websuche, Terminal, OpenClaw, Dokumente), falls du Informationen brauchst oder systemweite Aktionen auf dem Mac ausführen sollst! Du hast nativen Zugriff auf das Terminal und OpenClaw.`;
 
 const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
@@ -47,7 +110,7 @@ async function getConfig() {
   const debugLog = path.join(app.getPath('userData'), 'debug_app.txt');
   fs.appendFileSync(debugLog, `\n[${new Date().toISOString()}] getConfig called\n`);
   
-  let config = { apiKey: '', geminiApiKey: '', model: 'gpt-4o', assistRisk: 'guided', systemPrompt: DEFAULT_PROMPT, totalCost: 0 };
+  let config = { apiKey: '', geminiApiKey: '', model: 'gpt-4o', assistRisk: 'guided', systemPrompt: DEFAULT_PROMPT, totalCost: 0, wakeWord: 'Hey Inge' };
   if (fs.existsSync(configPath)) {
     try {
       const raw = JSON.parse(await fsPromises.readFile(configPath, 'utf-8'));
@@ -70,6 +133,14 @@ async function getConfig() {
   if (!config.imageQuality) config.imageQuality = 'standard';
   if (typeof config.totalCost !== 'number') config.totalCost = 0;
   if (!config.temperature && config.temperature !== 0) config.temperature = 0.5;
+  if (!config.wakeWord) config.wakeWord = 'Hey Inge';
+  if (config.wakeWordEnabled === undefined) config.wakeWordEnabled = false;
+  if (!config.embeddedLocalModel) config.embeddedLocalModel = embeddedEngine.DEFAULT_VISION_MODEL;
+  if (!config.liveAssistIntervalMs) config.liveAssistIntervalMs = 3000;
+  if (!config.hybridLocalTextModel) config.hybridLocalTextModel = 'qwen2.5:14b';
+  if (!config.hybridCloudModel) config.hybridCloudModel = 'gpt-4o-mini';
+  if (!config.hybridCloudVisionModel) config.hybridCloudVisionModel = 'gpt-4o';
+  if (config.hybridPreferLocal === undefined) config.hybridPreferLocal = true;
   const defaultSkills = [
       { id: 'screenchat', name: 'Screenchat (Screenshot)', prompt: 'SCREENCHAT: Du siehst den Bildschirm und beziehst dich in deinen Antworten auf den visuellen Kontext.' },
       { id: 'web', name: 'Webzugriff (Internet)', prompt: 'WEB-ACCESS: Du hast Zugriff aufs Internet. Suche aktiv nach aktuellen Informationen, wenn nötig.' },
@@ -173,6 +244,18 @@ app.whenReady().then(() => {
   createWindow();
   createOverlayWindow();
 
+  // Eingebettetes Vision-Modell beim Start laden (local-embedded)
+  getConfig().then((cfg) => {
+    if (cfg.model === 'local-embedded' || cfg.model === 'hybrid-smart') {
+      embeddedEngine.initEmbeddedLocalEngine(cfg, window?.webContents).catch((e) => {
+        console.error('Embedded local engine load error:', e);
+      });
+    }
+    if (cfg.model && cfg.model.startsWith('local-') && cfg.model !== 'local-embedded') {
+      initLocalModel(null).catch((e) => console.error('Background load error:', e));
+    }
+  });
+
   // Start MiroFish Backend automatically
   const mirofishDir = path.join(__dirname, 'MiroFish');
   if (fs.existsSync(mirofishDir)) {
@@ -219,6 +302,8 @@ app.whenReady().then(() => {
 });
 
 app.on('before-quit', () => {
+  liveAssistActive = false;
+  if (liveAssistTimer) clearInterval(liveAssistTimer);
   if (mirofishProcess) {
     console.log('Terminating MiroFish backend...');
     mirofishProcess.kill();
@@ -478,8 +563,10 @@ async function initLocalModel(event) {
     return true;
   }
   isLocalModelLoading = true;
+  const log = (msg) => { if (event) event.sender.send('agent-log', msg); };
+
   try {
-    event.sender.send('agent-log', '[LOKAL] Lade Llama Engine...');
+    log('[LOKAL] Lade Llama Engine...');
     const { getLlama, LlamaChatSession } = await import('node-llama-cpp');
     LlamaChatSessionClass = LlamaChatSession;
     localLlamaInstance = await getLlama();
@@ -487,22 +574,23 @@ async function initLocalModel(event) {
     const modelDir = path.join(app.getPath('userData'), 'models');
     if (!fs.existsSync(modelDir)) fs.mkdirSync(modelDir, { recursive: true });
     
-    // Gemma 2 2B Instruct (Q4_K_M) - klein und effizient (~1.6 GB)
-    const modelName = 'gemma-2-2b-it-Q4_K_M.gguf';
+    // Llama-3.2-11B-Vision-Instruct (Q4_K_M) - unterstützt Bilder und echtes Tool-Calling (~7.9 GB)
+    const modelName = 'Llama-3.2-11B-Vision-Instruct-Q4_K_M.gguf';
     const modelPath = path.join(modelDir, modelName);
 
     if (!fs.existsSync(modelPath)) {
-      event.sender.send('model-download-required');
+      if (event) event.sender.send('model-download-required');
       isLocalModelLoading = false;
       return false;
     }
 
-    event.sender.send('agent-log', '[LOKAL] Lade Modell in den Arbeitsspeicher (Metal/GPU)...');
+    log('[LOKAL] Lade Modell in den Arbeitsspeicher (Metal/GPU)...');
     localLlamaModel = await localLlamaInstance.loadModel({ modelPath });
     localLlamaContext = await localLlamaModel.createContext();
-    event.sender.send('agent-log', '[LOKAL] Modell ist einsatzbereit!');
+    log('[LOKAL] Modell ist einsatzbereit!');
   } catch (error) {
-    event.sender.send('agent-log', `[FEHLER] Lokales Modell konnte nicht geladen werden: ${error.message}`);
+    fs.appendFileSync(path.join(app.getPath('userData'), 'debug_app.txt'), `\n[ERROR] initLocalModel: ${error.stack}\n`);
+    log(`[FEHLER] Lokales Modell konnte nicht geladen werden: ${error.message}`);
     isLocalModelLoading = false;
     throw error;
   }
@@ -522,15 +610,26 @@ ipcMain.handle('approve-command', (event, { approved }) => {
 ipcMain.handle('process-query', async (event, { query, screenshotPath, history = [], skills = [], files = [] }) => {
   try {
     const config = await getConfig();
-    const selectedModel = config.model || 'gpt-4o';
-    const isGemini = selectedModel.startsWith('gemini');
-    const isLocal = selectedModel.startsWith('local-');
+    let selectedModel = config.model || 'gpt-4o';
+    const isHybrid = selectedModel === 'hybrid-smart';
+    let isGemini = selectedModel.startsWith('gemini');
+    let isEmbeddedLocal = selectedModel === 'local-embedded';
+    let isLocal = selectedModel.startsWith('local-') && !isEmbeddedLocal && !isHybrid;
+    let isLocalAPI = selectedModel === 'api-llama';
+    let hybridPlan = null;
+    let hybridEscalated = false;
+    let hybridScreenshotB64 = '';
 
     if (skills.includes('mirofish_full')) {
       return await runMiroFishSimulation(query, event);
     }
 
-    if (!isGemini && !isLocal && !config.apiKey) return { error: 'Kein OpenAI API Key gefunden. Bitte in den Einstellungen eintragen.' };
+    if (!isGemini && !isLocal && !isLocalAPI && !isEmbeddedLocal && !isHybrid && !config.apiKey) {
+      return { error: 'Kein OpenAI API Key gefunden. Bitte in den Einstellungen eintragen.' };
+    }
+    if (isHybrid && !config.apiKey && !config.localApiModel && !config.hybridLocalTextModel) {
+      return { error: 'Hybrid-Modus braucht Ollama (lokales Textmodell) oder einen OpenAI API Key für Cloud-Fallback.' };
+    }
     if (isGemini && !config.geminiApiKey) return { error: 'Kein Gemini API Key gefunden. Bitte in den Einstellungen eintragen.' };
 
     let finalSkills = [...skills];
@@ -584,21 +683,13 @@ ipcMain.handle('process-query', async (event, { query, screenshotPath, history =
         }
       }
 
-      const currentScreenshotPath = path.join(app.getPath('temp'), 'agent_current_screenshot.jpg');
       try {
-        if (window) window.hide();
-        await new Promise(r => setTimeout(r, 150));
-        let size = 1600; let jpegQual = 80;
-        if (config.imageQuality === 'low') { size = 800; jpegQual = 60; }
-        if (config.imageQuality === 'high') { size = 2400; jpegQual = 90; }
-        await execAsync(`screencapture -x -C -m "${currentScreenshotPath}"`);
-        await execAsync(`sips -s format jpeg -s formatOptions ${jpegQual} -Z ${size} "${currentScreenshotPath}" --out "${currentScreenshotPath}"`);
-        if (window) window.show();
-        
+        const currentScreenshotPath = await captureScreen(config.imageQuality);
         if (fs.existsSync(currentScreenshotPath)) {
           base64Image = fs.readFileSync(currentScreenshotPath).toString('base64');
+          try { fs.unlinkSync(currentScreenshotPath); } catch (_) { /* ignore */ }
         }
-      } catch(e) {
+      } catch (e) {
         if (window) window.show();
       }
     }
@@ -653,103 +744,67 @@ ipcMain.handle('process-query', async (event, { query, screenshotPath, history =
       }
     }
 
-    if (isLocal) {
-      // ==== LOKALES MODELL LOGIK ====
-      event.sender.send('agent-log', `Starte lokale Anfrage (Offline)...`);
-      
-      let base64ImageUsed = typeof base64Image !== 'undefined' ? base64Image : false;
-      let filesUsed = typeof files !== 'undefined' ? files : false;
+    if (isHybrid) {
+      hybridPlan = hybridAgent.planQuery({ query, skills, config });
+      event.sender.send('agent-log', `[HYBRID] ${hybridPlan.logMessage}`);
 
-      if (base64ImageUsed || (filesUsed && filesUsed.length > 0)) {
-        event.sender.send('agent-log', `[INFO] Lokales Modell unterstützt aktuell keine Bildanalyse oder Dateianhänge. Diese werden ignoriert.`);
+      if (hybridPlan.needsVision && !base64Image && useScreenshot) {
+        try {
+          const shot = await captureScreen(config.imageQuality);
+          if (fs.existsSync(shot)) {
+            base64Image = fs.readFileSync(shot).toString('base64');
+            try { fs.unlinkSync(shot); } catch (_) { /* ignore */ }
+          }
+        } catch (_) { /* ignore */ }
       }
 
-      const loaded = await initLocalModel(event);
-      if (!loaded) return { text: '' };
-
-      const sequence = localLlamaContext.getSequence();
-      try {
-        const session = new LlamaChatSessionClass({
-          contextSequence: sequence,
-          systemPrompt: promptText
-        });
-
-        // Bisherigen Verlauf ins lokale Format übertragen
-        let historyContext = "";
-        for (const msg of history) {
-           historyContext += `${msg.role === 'user' ? 'User' : 'Agent'}: ${msg.content}\n`;
+      if (hybridPlan.needsVision && base64Image) {
+        if (!embeddedEngine.isReady()) {
+          if (embeddedEngine.isLoading()) {
+            return { error: 'Vision-Modell lädt noch… bitte kurz warten.' };
+          }
+          const loaded = await embeddedEngine.initEmbeddedLocalEngine(config, event.sender);
+          if (!loaded) return { error: embeddedEngine.getStatus().message };
         }
-        
-        const fullQuery = history.length > 0 ? `Verlauf:\n${historyContext}\nAktuelle Frage: ${query}` : query;
-
-        event.sender.send('agent-log', `Generiere Antwort...`);
-        const responseText = await session.prompt(fullQuery);
-        
-        return { text: responseText, totalCost: config.totalCost };
-      } finally {
-        sequence.dispose();
-      }
-
-    } else if (isGemini) {
-      // ==== GOOGLE GEMINI LOGIC ====
-      event.sender.send('agent-log', `Sende Anfrage an Gemini (${selectedModel})...`);
-      const contents = [];
-      for (const msg of history) {
-        contents.push({ role: msg.role === 'assistant' ? 'model' : 'user', parts: [{ text: msg.content }] });
-      }
-      
-      let currentParts = [];
-      let finalQuery = query + fileContentsText;
-      currentParts.push({ text: `${promptText}\n\nFrage des Nutzers: ${finalQuery}` });
-      if (base64Image) {
-        currentParts.push({ inline_data: { mime_type: "image/jpeg", data: base64Image } });
-      }
-      contents.push({ role: 'user', parts: currentParts });
-
-      const requestBody = { 
-        contents,
-        generationConfig: { temperature: config.temperature }
-      };
-
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${selectedModel}:generateContent?key=${config.geminiApiKey}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestBody)
-      });
-
-      const data = await response.json();
-      if (data.error) throw new Error(data.error.message);
-
-      const messageText = data.candidates[0].content.parts[0].text;
-      
-      let queryCost = 0;
-      if (data.usageMetadata) {
-        if (selectedModel.includes('flash')) {
-           queryCost = (data.usageMetadata.promptTokenCount * 0.000000075) + (data.usageMetadata.candidatesTokenCount * 0.0000003);
-        } else {
-           queryCost = (data.usageMetadata.promptTokenCount * 0.00000125) + (data.usageMetadata.candidatesTokenCount * 0.000005);
+        const screenCtx = await hybridAgent.buildScreenContext(
+          base64Image,
+          embeddedEngine,
+          skills.includes('assistenz') || hybridPlan.needsTools
+        );
+        if (screenCtx) {
+          event.sender.send('agent-log', `[HYBRID] Bildschirm lokal analysiert (${screenCtx.length} Zeichen)`);
+          query = hybridAgent.wrapQueryWithScreen(query, screenCtx, fileContentsText);
+          fileContentsText = '';
         }
-        config.totalCost = (config.totalCost || 0) + queryCost;
-        await saveConfig({ totalCost: config.totalCost });
-      }
-      return { text: messageText, totalCost: config.totalCost };
-
-    } else {
-      // ==== OPENAI LOGIC WITH MULTI-TURN INTERNET SEARCH AND HISTORY ====
-      event.sender.send('agent-log', `Sende Anfrage an OpenAI (${selectedModel})...`);
-      let messages = [];
-      if (promptText) messages.push({ role: 'system', content: promptText });
-      
-      for (const msg of history) {
-        messages.push({ role: msg.role, content: msg.content });
       }
 
-      let finalQuery = query + fileContentsText;
-      let userContent = [{ type: 'text', text: finalQuery }];
-      if (base64Image) {
-        userContent.push({ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${base64Image}`, detail: 'high' } });
+      if (hybridPlan.tier === 'vision_only') {
+        isEmbeddedLocal = false;
+        isLocalAPI = true;
+        isGemini = false;
+        isLocal = false;
+        selectedModel = hybridAgent.getLocalTextModel(config);
+        base64Image = '';
+        event.sender.send('agent-log', `[HYBRID] Antwort lokal (${selectedModel}, Vision bereits als Text)`);
+      } else if (hybridPlan.tier === 'local') {
+        isEmbeddedLocal = false;
+        isLocalAPI = true;
+        isGemini = false;
+        isLocal = false;
+        selectedModel = hybridAgent.getLocalTextModel(config);
+        hybridScreenshotB64 = base64Image;
+        if (hybridPlan.injectVisionAsText) base64Image = '';
+        event.sender.send('agent-log', `[HYBRID] Lokales Textmodell: ${selectedModel}`);
+      } else if (hybridPlan.tier === 'cloud') {
+        isEmbeddedLocal = false;
+        isLocalAPI = false;
+        isGemini = false;
+        isLocal = false;
+        selectedModel = hybridPlan.cloudModel || config.hybridCloudVisionModel || 'gpt-4o';
+        event.sender.send('agent-log', `[HYBRID] Cloud-Modell: ${selectedModel}`);
+        if (!config.apiKey) return { error: 'Cloud-Fallback benötigt OpenAI API Key.' };
       }
-      messages.push({ role: 'user', content: userContent });
+    }
 
       let tools = [];
       if (skills.includes('web') || skills.includes('stockcheck') || skills.includes('tradingexpert') || skills.includes('deepresearch') || skills.includes('mirofish')) {
@@ -898,7 +953,7 @@ ipcMain.handle('process-query', async (event, { query, screenshotPath, history =
         );
       }
 
-      if (skills.includes('mac_controller')) {
+      if (true) {
         tools.push(
           {
             type: "function",
@@ -918,28 +973,223 @@ ipcMain.handle('process-query', async (event, { query, screenshotPath, history =
         );
       }
 
+      if (true) {
+        tools.push(
+          {
+            type: "function",
+            function: {
+              name: "delegate_to_pi_coding_agent",
+              description: "Delegiert eine komplexe Programmier- oder Rechercheaufgabe an den 'Pi Coding Agent'. Pi ist ein spezialisiertes autonomes Framework mit vollem Lese-/Schreibzugriff auf das Dateisystem und das Terminal.",
+              parameters: {
+                type: "object",
+                properties: { 
+                  task_description: { type: "string", description: "Die genaue Beschreibung der Aufgabe, die Pi autonom lösen soll (z.B. 'Erstelle eine React-Komponente in Ordner X')." }
+                },
+                required: ["task_description"]
+              }
+            }
+          }
+        );
+      }
+
       if (tools.length === 0) tools = undefined;
 
+    if (isEmbeddedLocal) {
+      if (!embeddedEngine.isReady()) {
+        if (embeddedEngine.isLoading()) {
+          const st = embeddedEngine.getStatus();
+          return { error: `Modell lädt noch… ${st.message}` };
+        }
+        event.sender.send('agent-log', '[LOKAL] Starte Modell-Laden…');
+        const loaded = await embeddedEngine.initEmbeddedLocalEngine(config, event.sender);
+        if (!loaded) return { error: embeddedEngine.getStatus().message };
+      }
+      event.sender.send('agent-log', '[LOKAL] Sende Anfrage an eingebettetes Vision-Modell…');
+
+      const ollamaMessages = [{ role: 'system', content: promptText }];
+      for (const msg of history) {
+        ollamaMessages.push({
+          role: msg.role === 'assistant' ? 'assistant' : 'user',
+          content: msg.content,
+        });
+      }
+      const userMsg = { role: 'user', content: query + fileContentsText };
+      if (base64Image) userMsg.images = [base64Image];
+      ollamaMessages.push(userMsg);
+
+      const messageText = await embeddedEngine.chatWithImage(ollamaMessages);
+      return { text: messageText, totalCost: config.totalCost };
+    }
+
+    if (isLocal) {
+      // ==== LOKALES MODELL LOGIK ====
+      event.sender.send('agent-log', `Starte lokale Anfrage (Offline)...`);
+      
+      let base64ImageUsed = typeof base64Image !== 'undefined' ? base64Image : false;
+      let filesUsed = typeof files !== 'undefined' ? files : false;
+
+      const loaded = await initLocalModel(event);
+      if (!loaded) return { text: '' };
+
+      const sequence = localLlamaContext.getSequence();
+      try {
+        const session = new LlamaChatSessionClass({
+          contextSequence: sequence,
+          systemPrompt: promptText
+        });
+
+        let historyContext = "";
+        for (const msg of history) {
+           historyContext += `${msg.role === 'user' ? 'User' : 'Agent'}: ${msg.content}\n`;
+        }
+        
+        let toolInstructions = "";
+        if (tools && tools.length > 0) {
+           toolInstructions = `\n\nDU HAST ZUGRIFF AUF FOLGENDE TOOLS:\n${JSON.stringify(tools, null, 2)}\n\nWICHTIG: Wenn du ein Tool nutzen willst, MUSS deine gesamte Antwort ausschließlich dieses JSON-Format haben: {"tool_calls": [{"function": {"name": "...", "arguments": "{...}"}}]}\nWenn du kein Tool nutzt, antworte normal als Text.`;
+        }
+
+        const fullQuery = history.length > 0 ? `Verlauf:\n${historyContext}\nAktuelle Frage: ${query}${toolInstructions}` : `${query}${toolInstructions}`;
+
+        event.sender.send('agent-log', `Generiere Antwort...`);
+        const responseText = await session.prompt(fullQuery);
+        
+        // Versuche Tool Calls zu parsen
+        try {
+           if (responseText.includes('tool_calls')) {
+               const jsonStr = responseText.substring(responseText.indexOf('{'), responseText.lastIndexOf('}') + 1);
+               const parsed = JSON.parse(jsonStr);
+               if (parsed && parsed.tool_calls) {
+                  // Mappe es in ein Format, das der OpenAI-Loop unten versteht
+                  data = { choices: [{ message: { content: null, tool_calls: parsed.tool_calls } }] };
+                  // Wir müssen hier abbrechen und in die normale Tool-Schleife fallen, indem wir so tun als wären wir OpenAI!
+                  isLocal = false; // Trick, damit die nachfolgende Logik greift (da isLocal dort ignoriert wird, wir haben schon data definiert)
+               }
+           }
+        } catch(e) { }
+
+        if (isLocal) {
+           return { text: responseText, totalCost: config.totalCost };
+        }
+      } finally {
+        sequence.dispose();
+      }
+    } 
+    
+    if (isGemini) {
+      // ==== GOOGLE GEMINI LOGIC ====
+      event.sender.send('agent-log', `Sende Anfrage an Gemini (${selectedModel})...`);
+      const contents = [];
+      for (const msg of history) {
+        contents.push({ role: msg.role === 'assistant' ? 'model' : 'user', parts: [{ text: msg.content }] });
+      }
+      
+      let currentParts = [];
+      let finalQuery = query + fileContentsText;
+      currentParts.push({ text: `${promptText}\n\nFrage des Nutzers: ${finalQuery}` });
+      if (base64Image) {
+        currentParts.push({ inline_data: { mime_type: "image/jpeg", data: base64Image } });
+      }
+      contents.push({ role: 'user', parts: currentParts });
+
+      const requestBody = { 
+        contents,
+        generationConfig: { temperature: config.temperature }
+      };
+
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${selectedModel}:generateContent?key=${config.geminiApiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody)
+      });
+
+      const data = await response.json();
+      if (data.error) throw new Error(data.error.message);
+
+      const messageText = data.candidates[0].content.parts[0].text;
+      
+      let queryCost = 0;
+      if (data.usageMetadata) {
+        if (selectedModel.includes('flash')) {
+           queryCost = (data.usageMetadata.promptTokenCount * 0.000000075) + (data.usageMetadata.candidatesTokenCount * 0.0000003);
+        } else {
+           queryCost = (data.usageMetadata.promptTokenCount * 0.00000125) + (data.usageMetadata.candidatesTokenCount * 0.000005);
+        }
+        config.totalCost = (config.totalCost || 0) + queryCost;
+        await saveConfig({ totalCost: config.totalCost });
+      }
+      return { text: messageText, totalCost: config.totalCost };
+
+    } else {
+      // ==== OPENAI LOGIC WITH MULTI-TURN INTERNET SEARCH AND HISTORY ====
+      event.sender.send('agent-log', `Sende Anfrage an OpenAI (${selectedModel})...`);
+      let messages = [];
+      if (promptText) messages.push({ role: 'system', content: promptText });
+      
+      for (const msg of history) {
+        messages.push({ role: msg.role, content: msg.content });
+      }
+
+      let finalQuery = query + fileContentsText;
+      let userContent = [{ type: 'text', text: finalQuery }];
+      if (base64Image) {
+        userContent.push({ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${base64Image}`, detail: 'high' } });
+      }
+      messages.push({ role: 'user', content: userContent });
+
+
+      let fetchUrl = isLocalAPI ? (config.localApiUrl || 'http://127.0.0.1:11434/v1/chat/completions') : 'https://api.openai.com/v1/chat/completions';
+
       const requestBody = {
-        model: selectedModel,
+        model: isLocalAPI
+          ? (selectedModel === 'api-llama' ? (config.localApiModel || 'llama3.2-vision') : selectedModel)
+          : selectedModel,
         messages: messages,
         max_completion_tokens: 2000,
         temperature: config.temperature
       };
       
       if (tools) requestBody.tools = tools;
+      
+      let headers = { 'Content-Type': 'application/json' };
+      if (!isLocalAPI) {
+        headers['Authorization'] = `Bearer ${config.apiKey}`;
+      }
 
-      let response = await fetch('https://api.openai.com/v1/chat/completions', {
+      let response = await fetch(fetchUrl, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${config.apiKey}`
-        },
+        headers: headers,
         body: JSON.stringify(requestBody)
       });
 
       let data = await response.json();
       if (data.error) throw new Error(data.error.message);
+
+      let message = data.choices[0].message;
+      if (isHybrid && hybridPlan?.escalateOnFailure && hybridAgent.shouldEscalateToCloud(hybridPlan, data, message) && !hybridEscalated && config.apiKey) {
+        hybridEscalated = true;
+        const cloudModel = hybridPlan.cloudModel || config.hybridCloudVisionModel || 'gpt-4o';
+        event.sender.send('agent-log', `[HYBRID] ⬆️ Eskalation zu Cloud: ${cloudModel}`);
+        isLocalAPI = false;
+        selectedModel = cloudModel;
+        fetchUrl = 'https://api.openai.com/v1/chat/completions';
+        headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${config.apiKey}` };
+        messages = [];
+        if (promptText) messages.push({ role: 'system', content: promptText });
+        for (const msg of history) messages.push({ role: msg.role, content: msg.content });
+        const cloudQuery = query + fileContentsText;
+        const cloudUserContent = [{ type: 'text', text: cloudQuery }];
+        const cloudB64 = hybridScreenshotB64 || base64Image;
+        if (hybridPlan.needsVision && cloudB64) {
+          cloudUserContent.push({ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${cloudB64}`, detail: 'high' } });
+        }
+        messages.push({ role: 'user', content: cloudUserContent });
+        requestBody.model = cloudModel;
+        requestBody.messages = messages;
+        response = await fetch(fetchUrl, { method: 'POST', headers, body: JSON.stringify(requestBody) });
+        data = await response.json();
+        if (data.error) throw new Error(data.error.message);
+        message = data.choices[0].message;
+      }
       
       let usage = data.usage;
       let totalQueryCost = 0;
@@ -956,8 +1206,6 @@ ipcMain.handle('process-query', async (event, { query, screenshotPath, history =
       }
       
       addCost(usage);
-
-      let message = data.choices[0].message;
 
       // MULTI-TURN SCHLEIFE
       let toolResultsHtml = "";
@@ -1219,17 +1467,27 @@ ipcMain.handle('process-query', async (event, { query, screenshotPath, history =
             // Auto-Screenshot Feedback Loop
             try {
               event.sender.send('agent-log', `[ASSISTENZ] Erfasse neuen Bildschirmzustand...`);
-              const tmpShot = path.join(app.getPath('temp'), 'auto_screenshot.jpg');
-              await execAsync(`screencapture -x "${tmpShot}"`);
-              await execAsync(`sips -s format jpeg -s formatOptions 60 -Z 1600 "${tmpShot}" --out "${tmpShot}"`);
-              const b64 = require('fs').readFileSync(tmpShot, {encoding: 'base64'});
-              messages.push({
-                role: 'user',
-                content: [
-                  { type: 'text', text: "Das ist der neue Bildschirmzustand nach deiner letzten Aktion. Wenn die Aufgabe noch nicht abgeschlossen ist, plane die nächsten Schritte. Wenn sie abgeschlossen ist, antworte dem Nutzer." },
-                  { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${b64}` } }
-                ]
-              });
+              const tmpShot = await captureScreen(config.imageQuality, { hideAgentWindow: false, forLive: false });
+              const b64 = fs.readFileSync(tmpShot, { encoding: 'base64' });
+              try { fs.unlinkSync(tmpShot); } catch (_) { /* ignore */ }
+              if (isLocalAPI) {
+                if (!embeddedEngine.isReady()) await embeddedEngine.initEmbeddedLocalEngine(config, event.sender);
+                const ctx = embeddedEngine.isReady()
+                  ? await hybridAgent.buildScreenContext(b64, embeddedEngine, true)
+                  : '';
+                messages.push({
+                  role: 'user',
+                  content: `Neuer Bildschirmzustand nach deiner letzten Aktion:\n${ctx || '(Analyse fehlgeschlagen)'}\n\nWenn die Aufgabe noch nicht abgeschlossen ist, plane die nächsten Schritte. Wenn sie abgeschlossen ist, antworte dem Nutzer.`,
+                });
+              } else {
+                messages.push({
+                  role: 'user',
+                  content: [
+                    { type: 'text', text: "Das ist der neue Bildschirmzustand nach deiner letzten Aktion. Wenn die Aufgabe noch nicht abgeschlossen ist, plane die nächsten Schritte. Wenn sie abgeschlossen ist, antworte dem Nutzer." },
+                    { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${b64}` } }
+                  ]
+                });
+              }
             } catch(e) {
               console.error("Auto-Screenshot failed", e);
             }
@@ -1262,12 +1520,13 @@ ipcMain.handle('process-query', async (event, { query, screenshotPath, history =
               try {
                 event.sender.send('agent-log', `[MAC CONTROLLER] Starte Framework für Task... Dies kann einige Minuten dauern.`);
                 const execPromise = require('util').promisify(require('child_process').exec);
-                // Wir wrappen OpenClaw via npx (kann bei Bedarf auf ein lokales Python-Script wie OS-Copilot angepasst werden)
-                // Hier simulieren/integrieren wir OpenClaw als Standardausführung
-                const cmd = `npx --yes openclaw prompt "${task_description.replace(/"/g, '\\"')}"`; 
-                const { stdout, stderr } = await execPromise(cmd, { timeout: 300000 }); // 5 min timeout
+                // Nutze die lokal installierte Version von OpenClaw über das System-Node.js
+                const openClawBin = require('path').join(app.getAppPath(), 'node_modules', 'openclaw', 'openclaw.mjs');
+                const cmd = `node "${openClawBin}" prompt "${task_description.replace(/"/g, '\\"')}"`; 
+                const env = { ...process.env };
+                const { stdout, stderr } = await execPromise(cmd, { timeout: 300000, env }); // 5 min timeout
                 
-                resultMessage = `Framework Ausführung erfolgreich:\\nSTDOUT:\\n${stdout}\\nSTDERR:\\n${stderr}`;
+                resultMessage = `Framework Ausführung erfolgreich:\nSTDOUT:\n${stdout}\nSTDERR:\n${stderr}`;
                 toolResultsHtml += `<br><span style="color:#34c759; font-size:11px;">*(OpenClaw Task beendet)*</span>`;
                 if (overlayWindow) overlayWindow.webContents.send('set-status', `✅ OpenClaw Task beendet`);
               } catch (e) {
@@ -1278,17 +1537,109 @@ ipcMain.handle('process-query', async (event, { query, screenshotPath, history =
             }
             messages.push({ role: 'tool', tool_call_id: toolCall.id, content: resultMessage });
           }
+          else if (toolCall.function.name === 'delegate_to_pi_coding_agent') {
+            const args = JSON.parse(toolCall.function.arguments);
+            const task_description = args.task_description;
+            
+            event.sender.send('agent-log', `[PI AGENT] Starte Pi Coding Agent für Task...`);
+            if (overlayWindow) overlayWindow.webContents.send('set-status', `⚙️ Pi Agent arbeitet...`);
+            
+            let blocked = false;
+            let resultMessage = "";
+            
+            if (overlayWindow) overlayWindow.webContents.send('set-status', `⚠️ Warten auf Bestätigung`);
+            event.sender.send('show-approval-popup', { 
+              command: `Pi Coding Agent ausführen:\n${task_description}`, 
+              assessment: `Pi arbeitet autonom auf dem Dateisystem und Terminal.` 
+            });
+            const isApproved = await new Promise((resolve) => pendingApproval = resolve);
+            
+            if (!isApproved) {
+              blocked = true;
+              resultMessage = "Der Nutzer hat die Ausführung durch den Pi Agenten blockiert.";
+              toolResultsHtml += `<br><span style="color:#ff3b30; font-size:11px;">*(Pi Agent blockiert)*</span>`;
+              if (overlayWindow) overlayWindow.webContents.send('set-status', `❌ Aktion blockiert`);
+            } else {
+              try {
+                event.sender.send('agent-log', `[PI AGENT] Starte lokalen Node.js (v24) Prozess für Pi...`);
+                
+                const { spawn } = require('child_process');
+                const piCli = require('path').join(app.getAppPath(), 'node_modules', '@earendil-works', 'pi-coding-agent', 'dist', 'cli.js');
+                
+                const env = { ...process.env };
+                if (config.apiKey) {
+                  env.OPENAI_API_KEY = config.apiKey;
+                  env.ANTHROPIC_API_KEY = config.apiKey;
+                }
+                
+                const piProcess = spawn('node', [piCli, '--mode', 'json', task_description], { env });
+                
+                let finalResponseText = "";
+                let accumulatedBuffer = "";
+                
+                piProcess.stdout.on('data', (data) => {
+                  accumulatedBuffer += data.toString();
+                  const lines = accumulatedBuffer.split('\n');
+                  accumulatedBuffer = lines.pop() || "";
+                  
+                  for (const line of lines) {
+                    if (!line.trim()) continue;
+                    try {
+                      const eventObj = JSON.parse(line);
+                      if (eventObj.type === "message_update" && eventObj.assistantMessageEvent?.type === "text_delta") {
+                        event.sender.send('agent-log', `[PI] ${eventObj.assistantMessageEvent.delta}`);
+                      } else if (eventObj.type === "message_update" && eventObj.assistantMessageEvent?.type === "tool_call_started") {
+                        event.sender.send('agent-log', `[PI] Führt Tool aus: ${eventObj.assistantMessageEvent.toolName}`);
+                        if (overlayWindow) overlayWindow.webContents.send('set-status', `⚙️ Pi: ${eventObj.assistantMessageEvent.toolName}...`);
+                      } else if (eventObj.type === "agent_end") {
+                         const msgs = eventObj.messages || [];
+                         for (let i = msgs.length - 1; i >= 0; i--) {
+                           if (msgs[i].role === 'assistant') {
+                              finalResponseText = msgs[i].content.map(c => c.type === 'text' ? c.text : '').join('');
+                              break;
+                           }
+                         }
+                      }
+                    } catch (e) {}
+                  }
+                });
+                
+                piProcess.stderr.on('data', (data) => {
+                  console.error(`[PI ERROR] ${data.toString()}`);
+                });
+                
+                event.sender.send('agent-log', `[PI AGENT] Übergebe Prompt an Pi... Bitte warten.`);
+                
+                await new Promise((resolve, reject) => {
+                  piProcess.on('close', (code) => {
+                    if (code !== 0 && !finalResponseText) {
+                       reject(new Error(`Pi beendet mit Code ${code}`));
+                    } else {
+                       resolve();
+                    }
+                  });
+                  piProcess.on('error', reject);
+                });
+                
+                resultMessage = `Pi Agent Ausführung erfolgreich:\nResultat:\n${finalResponseText}`;
+                toolResultsHtml += `<br><span style="color:#34c759; font-size:11px;">*(Pi Agent beendet)*</span>`;
+                if (overlayWindow) overlayWindow.webContents.send('set-status', `✅ Pi Agent beendet`);
+              } catch (e) {
+                resultMessage = `Fehler bei der Pi-Ausführung: ${e.message}`;
+                toolResultsHtml += `<br><span style="color:#ffcc00; font-size:11px;">*(Pi Agent Fehler: ${e.message})*</span>`;
+                if (overlayWindow) overlayWindow.webContents.send('set-status', `❌ Pi Agent Fehler`);
+              }
+            }
+            messages.push({ role: 'tool', tool_call_id: toolCall.id, content: resultMessage });
+          }
         }
 
-        // 2. Request an OpenAI mit den Tool-Ergebnissen
+        // 2. Request mit den Tool-Ergebnissen (lokal oder Cloud)
         event.sender.send('agent-log', `Sende Tool-Ergebnisse zurück an KI...`);
         requestBody.messages = messages;
-        response = await fetch('https://api.openai.com/v1/chat/completions', {
+        response = await fetch(fetchUrl, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${config.apiKey}`
-          },
+          headers,
           body: JSON.stringify(requestBody)
         });
 
@@ -1312,8 +1663,47 @@ ipcMain.handle('process-query', async (event, { query, screenshotPath, history =
 
 ipcMain.handle('save-config', async (event, config) => {
   await saveConfig(config);
+  if (config.model === 'local-embedded' || config.model === 'hybrid-smart') {
+    embeddedEngine.initEmbeddedLocalEngine(await getConfig(), event.sender).catch((e) => {
+      console.error('Embedded local engine load error:', e);
+    });
+  } else if (config.model && config.model.startsWith('local-')) {
+    initLocalModel(null).catch((e) => console.error('Background load error:', e));
+  }
   return true;
 });
+
+ipcMain.handle('get-local-model-status', () => embeddedEngine.getStatus());
+
+ipcMain.handle('init-local-model', async (event) => {
+  const cfg = await getConfig();
+  const ok = await embeddedEngine.initEmbeddedLocalEngine(cfg, event.sender);
+  return ok ? { ok: true, status: embeddedEngine.getStatus() } : { error: embeddedEngine.getStatus().message };
+});
+
+ipcMain.handle('set-live-assist', async (event, { enabled }) => {
+  const cfg = await getConfig();
+  if (enabled) {
+    if (!embeddedEngine.isReady()) {
+      const ok = await embeddedEngine.initEmbeddedLocalEngine(cfg, event.sender);
+      if (!ok) return { error: embeddedEngine.getStatus().message };
+    }
+    liveAssistActive = true;
+    lastScreenHash = null;
+    const interval = cfg.liveAssistIntervalMs || 3000;
+    if (liveAssistTimer) clearInterval(liveAssistTimer);
+    liveAssistTimer = setInterval(() => liveAssistTick(event.sender), interval);
+    liveAssistTick(event.sender);
+    return { ok: true, active: true };
+  }
+  liveAssistActive = false;
+  if (liveAssistTimer) clearInterval(liveAssistTimer);
+  liveAssistTimer = null;
+  lastScreenHash = null;
+  return { ok: true, active: false };
+});
+
+ipcMain.handle('get-live-assist-status', () => ({ active: liveAssistActive }));
 
 ipcMain.handle('get-config', async (event) => {
   return await getConfig();
@@ -1340,8 +1730,8 @@ ipcMain.on('set-window-mode', (event, mode) => {
   const bottom = bounds.y + bounds.height;
 
   if (mode === 'bubble') {
-    const newWidth = 80;
-    const newHeight = 80;
+    const newWidth = 90;
+    const newHeight = 90;
     window.setBounds({ x: right - newWidth, y: bottom - newHeight, width: newWidth, height: newHeight }, true);
   } else if (mode === 'expanded') {
     const newWidth = 480;
@@ -1429,13 +1819,13 @@ ipcMain.handle('synthesize-speech', async (event, text) => {
 });
 
 ipcMain.on('start-model-download', async (event) => {
-  const modelDir = path.join(app.getPath('userData'), 'models');
-  const modelName = 'gemma-2-2b-it-Q4_K_M.gguf';
-  const modelPath = path.join(modelDir, modelName);
+  const modelName = 'Llama-3.2-11B-Vision-Instruct-Q4_K_M.gguf';
+  const modelPath = path.join(app.getPath('userData'), 'models', modelName);
+  
   try {
     event.sender.send('model-download-progress', { progress: 0, mb: '0.0' });
     event.sender.send('agent-log', `[LOKAL] Modell wird manuell heruntergeladen...`);
-    await downloadModelFile(`https://huggingface.co/bartowski/gemma-2-2b-it-GGUF/resolve/main/${modelName}`, modelPath, event);
+    await downloadModelFile(`https://huggingface.co/bartowski/Llama-3.2-11B-Vision-Instruct-GGUF/resolve/main/${modelName}`, modelPath, event);
     event.sender.send('agent-log', '[LOKAL] Download abgeschlossen!');
     event.sender.send('model-download-progress', { progress: 100, mb: '1600' });
   } catch (e) {

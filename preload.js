@@ -19,5 +19,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onSimulationStart: (callback) => ipcRenderer.on('simulation-start', callback),
   onSimulationEnd: (callback) => ipcRenderer.on('simulation-end', callback),
   transcribeAudio: (buffer) => ipcRenderer.invoke('transcribe-audio', buffer),
-  synthesizeSpeech: (text) => ipcRenderer.invoke('synthesize-speech', text)
+  synthesizeSpeech: (text) => ipcRenderer.invoke('synthesize-speech', text),
+  getLocalModelStatus: () => ipcRenderer.invoke('get-local-model-status'),
+  initLocalModel: () => ipcRenderer.invoke('init-local-model'),
+  setLiveAssist: (enabled) => ipcRenderer.invoke('set-live-assist', { enabled }),
+  getLiveAssistStatus: () => ipcRenderer.invoke('get-live-assist-status'),
+  onLocalModelStatus: (callback) => ipcRenderer.on('local-model-status', (_event, data) => callback(data)),
+  onLocalModelProgress: (callback) => ipcRenderer.on('local-model-progress', (_event, data) => callback(data)),
+  onLiveAssistObservation: (callback) => ipcRenderer.on('live-assist-observation', (_event, data) => callback(data)),
+  onLiveAssistError: (callback) => ipcRenderer.on('live-assist-error', (_event, data) => callback(data))
 });

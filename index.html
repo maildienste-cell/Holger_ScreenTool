@@ -242,6 +242,9 @@
         <button id="crop-btn" title="Bildschirmausschnitt wählen" style="background: transparent; color: #aaa; border: none; width: 32px; height: 32px; cursor: pointer; display: flex; justify-content: center; align-items: center;">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2v14a2 2 0 0 0 2 2h14"></path><path d="M18 22V8a2 2 0 0 0-2-2H2"></path></svg>
         </button>
+        <button id="live-btn" title="Live-Bildschirm (lokales LLM)" style="background: transparent; color: #aaa; border: none; width: 32px; height: 32px; cursor: pointer; display: flex; justify-content: center; align-items: center;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+        </button>
         <button id="mic-btn" title="Spracheingabe" style="background: transparent; color: #aaa; border: none; width: 32px; height: 32px; cursor: pointer; display: flex; justify-content: center; align-items: center;">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>
         </button>
@@ -303,9 +306,33 @@
           <option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
         </optgroup>
         <optgroup label="Lokal (Offline)">
-          <option value="local-gemma-2b">Gemma 2 (2B) - Lokal (ohne API Key)</option>
+          <option value="hybrid-smart">⚡ Hybrid Smart (lokal + Cloud-Fallback, spart Kosten)</option>
+          <option value="local-embedded">Lokal eingebettet (Vision, Start-Laden)</option>
+          <option value="api-llama">Lokale Llama API (z.B. Ollama)</option>
         </optgroup>
       </select>
+    </div>
+
+    <div class="setting-group" id="hybrid-settings">
+      <label>Hybrid: Lokales Textmodell (Tools/Aktionen)</label>
+      <input type="text" id="cfg-hybrid-local" placeholder="qwen2.5:14b">
+      <label style="margin-top: 10px;">Hybrid: Cloud-Fallback (einfach)</label>
+      <input type="text" id="cfg-hybrid-cloud" placeholder="gpt-4o-mini">
+      <label style="margin-top: 10px;">Hybrid: Cloud-Fallback (Vision/Aktionen)</label>
+      <input type="text" id="cfg-hybrid-cloud-vision" placeholder="gpt-4o">
+      <p style="font-size: 11px; opacity: 0.6; margin: 6px 0 0 0;">Hybrid analysiert den Bildschirm lokal (moondream), führt Aktionen mit Qwen/Llama aus und eskaliert nur bei Bedarf zu OpenAI. Pi-Agent und OpenClaw bleiben verfügbar.</p>
+    </div>
+
+    <div class="setting-group" id="embedded-local-settings">
+      <label>Eingebettetes Vision-Modell (Ollama)</label>
+      <input type="text" id="cfg-embedded-model" placeholder="moondream">
+      <p style="font-size: 11px; opacity: 0.6; margin: 6px 0 0 0;">Empfohlen: <b>moondream</b> (~1,7 GB). llama3.2-vision braucht ältere Ollama-Versionen. Wird beim Start in den RAM geladen.</p>
+      <div id="local-model-status" style="font-size: 12px; margin-top: 8px; padding: 8px; border-radius: 6px; background: rgba(0,0,0,0.25); color: #aaa;">Status: —</div>
+    </div>
+
+    <div class="setting-group">
+      <label>Live-Bildschirm (Sekunden zwischen Frames)</label>
+      <input type="number" id="cfg-live-interval" min="2" max="15" step="1" value="3" style="width: 100%;">
     </div>
 
     <div class="setting-group">
@@ -326,6 +353,16 @@
     <div class="setting-group">
       <label>Gemini API Key (für Google)</label>
       <input type="password" id="cfg-geminikey" placeholder="AIzaSy...">
+    </div>
+    
+    <div class="setting-group">
+      <label>Lokal API URL (für Ollama/LM Studio)</label>
+      <input type="text" id="cfg-local-url" placeholder="http://127.0.0.1:11434/v1/chat/completions">
+    </div>
+    
+    <div class="setting-group">
+      <label>Lokal API Modell (Name)</label>
+      <input type="text" id="cfg-local-model" placeholder="qwen2.5:14b">
     </div>
     
     <div class="setting-group">
@@ -352,6 +389,14 @@
     </div>
     
     <div class="setting-group">
+      <label style="display: flex; align-items: center; gap: 8px;">
+        <input type="checkbox" id="cfg-wakeword-enabled" style="margin: 0;">
+        Wake-Word (z.B. "Hey Inge") aktiv — hält Mikro dauerhaft bereit
+      </label>
+      <input type="text" id="cfg-wakeword" placeholder="Hey Inge">
+    </div>
+    
+    <div class="setting-group">
       <label>System Prompt (Verhalten)</label>
       <textarea id="cfg-prompt" placeholder="Du bist Antigravity..."></textarea>
     </div>
@@ -375,7 +420,7 @@
   </div>
 
   <!-- Bubble View (Floating Chat Icon) -->
-  <div class="agent-container" id="bubble-view" style="display: none; border-radius: 50%; width: 100%; height: 100%; box-sizing: border-box; -webkit-app-region: drag; flex-direction: row; justify-content: center; align-items: center; padding: 0;">
+  <div class="agent-container" id="bubble-view" style="display: none; border-radius: 50%; width: 64px; height: 64px; box-sizing: border-box; -webkit-app-region: drag; flex-direction: row; justify-content: center; align-items: center; padding: 0; box-shadow: 0 4px 12px rgba(0,0,0,0.5);">
     <div id="bubble-click" style="-webkit-app-region: no-drag; cursor: pointer; width: 44px; height: 44px; border-radius: 50%; display: flex; justify-content: center; align-items: center; transition: all 0.2s;">
       <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path>
@@ -387,10 +432,22 @@
   <script src="node_modules/dompurify/dist/purify.min.js"></script>
   <script src="renderer.js"></script>
 
+  <!-- LOCAL MODEL LOADING OVERLAY -->
+  <div id="local-model-overlay" style="display: none; position: absolute; top:0; left:0; width:100%; height:100%; background: rgba(30,30,30,0.95); z-index: 1001; flex-direction: column; justify-content: center; align-items: center; text-align: center; padding: 20px; box-sizing: border-box;">
+    <h3 id="local-model-overlay-title" style="margin-top:0; color:white;">Lokales Vision-Modell wird geladen…</h3>
+    <p id="local-model-overlay-text" style="font-size: 13px; margin-bottom: 16px; color:#ccc;">Verbinde mit Ollama…</p>
+    <div style="width: 100%; background: rgba(255,255,255,0.1); border-radius: 4px; height: 8px; overflow: hidden; margin-bottom: 16px;">
+      <div id="local-model-overlay-bar" style="width: 0%; height: 100%; background: #34c759; transition: width 0.3s;"></div>
+    </div>
+    <p id="local-model-overlay-hint" style="font-size: 11px; color: #888; margin: 0 0 12px 0;">Erstes Laden: ~7,8 GB — kann 5–15 Minuten dauern.</p>
+    <button id="local-model-overlay-dismiss" style="padding: 10px 16px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.2); background: rgba(255,255,255,0.1); color: white; cursor: pointer;">Im Hintergrund laden</button>
+    <button id="local-model-overlay-retry" style="display:none; padding: 10px 16px; border-radius: 8px; border: none; background: #007aff; color: white; cursor: pointer; margin-top: 8px;">Erneut versuchen</button>
+  </div>
+
   <!-- SETUP OVERLAY -->
   <div id="setup-overlay" style="display: none; position: absolute; top:0; left:0; width:100%; height:100%; background: rgba(30,30,30,0.95); z-index: 1000; flex-direction: column; justify-content: center; align-items: center; text-align: center; padding: 20px; box-sizing: border-box;">
-    <h3 style="margin-top:0; color:white;">Lokales Modell fehlt</h3>
-    <p style="font-size: 13px; margin-bottom: 20px; color:#ccc;">Das Gemma-Modell (ca. 1.6 GB) muss einmalig heruntergeladen werden.</p>
+    <h3 style="margin-top:0; color:white;">Lokales Vision-Modell fehlt</h3>
+    <p style="font-size: 13px; margin-bottom: 20px; color:#ccc;">Das Llama-3.2-Vision Modell (ca. 8 GB) muss einmalig heruntergeladen werden. Stelle sicher, dass du genug RAM/Speicherplatz hast.</p>
     <button id="btn-download-model" style="padding: 12px 20px; border-radius: 8px; border: none; background: #007aff; color: white; cursor: pointer; font-weight: bold; width: 100%;">Jetzt herunterladen</button>
     <div id="download-progress-container" style="display:none; width: 100%; margin-top: 20px;">
       <div style="width: 100%; background: #444; border-radius: 5px; height: 12px; overflow: hidden;">
